@@ -6,7 +6,7 @@
  *   model: ""        # 可选，覆盖文本模型；空 = 用 AI 服务默认
  *   ---
  *   <系统提示词正文>
- * 文件即唯一事实来源；文件缺失时由调用方回退到代码默认值。
+ * 内置文件是唯一事实来源；缺失或内容为空时启动/调用失败。
  */
 import { skillsManagerWorkspace } from './skills.js'
 
@@ -45,16 +45,13 @@ export function serializePromptFile(file: AgentPromptFile): string {
   return `---\nname: ${file.name}\nmodel: "${file.model}"\n---\n\n${file.instructions.trim()}\n`
 }
 
-/** 读取指定路径的 prompt 文件；文件不存在或解析失败返回 null */
+/** 缺少可选语言文件时返回 null；读取错误或空内容直接失败。 */
 async function readPromptFile(path: string): Promise<AgentPromptFile | null> {
-  try {
-    if (!await fsm().exists(path)) return null
-    const raw = String(await fsm().readFile(path, { encoding: 'utf-8' }))
-    const parsed = parsePromptFile(raw)
-    return parsed.instructions ? parsed : null
-  } catch {
-    return null
-  }
+  if (!await fsm().exists(path)) return null
+  const raw = String(await fsm().readFile(path, { encoding: 'utf-8' }))
+  const parsed = parsePromptFile(raw)
+  if (!parsed.instructions) throw new Error('内置 Prompt 内容为空')
+  return parsed
 }
 
 /** 读取基础版（中文）prompt 文件 — model 字段永远只从基础版解析，避免多语言文件漂移 */

@@ -3,7 +3,7 @@
  * 端点: /api/v3/contents/generations/tasks (注意 /api/v3 前缀)
  * 响应: { id: "task-xxx" } -> 轮询获取状态
  *
- * 仅支持 Doubao Seedance 2.0+ 系列模型，生成模式只保留多模态参考:
+ * Doubao 与 Dreamina 模型均使用火山 v3 协议，不按模型名切换端点。
  * - reference   多模态参考（≤9 reference_image + ≤3 reference_video + ≤3 reference_audio + 可选文本）
  *   有参考音频时至少包含 1 个参考图片或视频
  */
@@ -22,7 +22,6 @@ import { joinProviderUrl } from './url'
  * dreamina-*；两者均按原模型名透传给上游。
  */
 const SEEDANCE2_MODEL_PREFIXES = ['doubao-seedance-2-0', 'dreamina-seedance-2-0', 'dreamina-seedance-2-5']
-const DREAMINA_MODEL_PREFIXES = ['dreamina-seedance-2-0', 'dreamina-seedance-2-5']
 const DEFAULT_MODEL = 'doubao-seedance-2-0-mini-260615'
 
 /** 多模态参考素材上限：图片 9、视频 3、音频 3 */
@@ -77,30 +76,6 @@ export class VolcEngineVideoAdapter implements VideoProviderAdapter {
     const duration = this.normalizeDuration(record.duration)
     const resolution = record.resolution === '480p' ? '480p' : '720p'
     const ratio = record.aspectRatio || 'adaptive'
-    const usesDreaminaGateway = DREAMINA_MODEL_PREFIXES.some(prefix => model.startsWith(prefix))
-
-    // New API-compatible gateways expose Dreamina through /v1/video/generations
-    // rather than Volcengine's native /api/v3 endpoint. Keep their documented
-    // prompt/images/content request shapes intact.
-    if (usesDreaminaGateway) {
-      const body: any = { model, resolution, ratio, duration }
-      // The gateway translates images into content but does not infer the
-      // reference_image role. Use the role-aware content form for every ref.
-      if (refImages.length || refVideos.length || refAudios.length) {
-        body.content = content
-      } else {
-        if (prompt) body.prompt = prompt
-      }
-      return {
-        url: joinProviderUrl(config.baseUrl, '/v1', '/video/generations'),
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${config.apiKey}`,
-        },
-        body,
-      }
-    }
 
     const body: any = {
       model,
@@ -137,19 +112,8 @@ export class VolcEngineVideoAdapter implements VideoProviderAdapter {
   }
 
   buildPollRequest(config: AIConfig, taskId: string): ProviderRequest {
-    const model = config.model || DEFAULT_MODEL
-    if (DREAMINA_MODEL_PREFIXES.some(prefix => model.startsWith(prefix))) {
-      return {
-        url: joinProviderUrl(config.baseUrl, '/v1', `/video/generations/${encodeURIComponent(taskId)}`),
-        method: 'GET',
-        headers: {
-          'Authorization': `Bearer ${config.apiKey}`,
-        },
-        body: undefined,
-      }
-    }
     return {
-      url: joinProviderUrl(config.baseUrl, '/api/v3', `/contents/generations/tasks/${taskId}`),
+      url: joinProviderUrl(config.baseUrl, '/api/v3', `/contents/generations/tasks/${encodeURIComponent(taskId)}`),
       method: 'GET',
       headers: {
         'Authorization': `Bearer ${config.apiKey}`,

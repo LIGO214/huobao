@@ -4,18 +4,18 @@
 import fs from 'fs'
 import path from 'path'
 import { v4 as uuid } from 'uuid'
-import { db, getInsertId, schema } from '../db/index.js'
-import { eq } from 'drizzle-orm'
-import { now } from '../utils/response.js'
+import { getMergeInputs, requireMergeEpisode, createMerge, failMerge, completeMerge } from '../data/tenant/merges.js'
+import { requireCurrentTenant, runWithTenant } from '../security/tenant-runtime.js'
 import { logTaskError, logTaskStart, logTaskSuccess } from '../utils/task-logger.js'
 import { extractVideoPoster } from '../utils/video-poster.js'
 import { ffmpeg, checkFfmpegSuite } from '../utils/ffmpeg.js'
-import { DATA_ROOT, STORAGE_ROOT } from '../utils/paths.js'
+import { DATA_ROOT } from '../utils/paths.js'
+import { getAbsolutePath } from '../utils/storage.js'
+import { saveTenantBytes } from '../utils/tenant-storage.js'
+import { writeFfmpegMedia } from '../utils/ffmpeg-media.js'
 
 function toAbsPath(relativePath: string): string {
-  if (path.isAbsolute(relativePath)) return relativePath
-  if (relativePath.startsWith('static/')) return path.join(DATA_ROOT, relativePath)
-  return path.join(STORAGE_ROOT, relativePath)
+  return getAbsolutePath(relativePath)
 }
 
 function getDramaVideoUrl(metadata: string | null, field: 'openingVideoUrl' | 'endingVideoUrl'): string | null {
@@ -57,20 +57,20 @@ function extractCaptionTexts(description: string | null, videoPrompt: string | n
 }
 
 export async function getEpisodeSubtitles(episodeId: number): Promise<string> {
+  await requireMergeEpisode(requireCurrentTenant(), episodeId)
   const filePath = toAbsPath(subtitleRelativePath(episodeId))
   return fs.existsSync(filePath) ? fs.readFileSync(filePath, 'utf-8') : ''
 }
 
 export async function saveEpisodeSubtitles(episodeId: number, content: string): Promise<string> {
+  await requireMergeEpisode(requireCurrentTenant(), episodeId)
   const normalized = String(content || '').replace(/\r\n/g, '\n').trim()
   if (!normalized) throw new Error('字幕内容不能为空')
   if (!/\d{2}:\d{2}:\d{2},\d{3}\s+-->\s+\d{2}:\d{2}:\d{2},\d{3}/.test(normalized)) {
     throw new Error('字幕格式无效，请使用 SRT 时间格式，例如 00:00:03,000 --> 00:00:06,000')
   }
-  const filePath = toAbsPath(subtitleRelativePath(episodeId))
-  fs.mkdirSync(path.dirname(filePath), { recursive: true })
-  fs.writeFileSync(filePath, `${normalized}\n`, 'utf-8')
-  fs.writeFileSync(toAbsPath(subtitleAssRelativePath(episodeId)), srtToAss(normalized), 'utf-8')
+  await saveTenantBytes(subtitleRelativePath(episodeId), Buffer.from(`${normalized}\n`))
+  await saveTenantBytes(subtitleAssRelativePath(episodeId), Buffer.from(srtToAss(normalized)))
   return subtitleRelativePath(episodeId)
 }
 
@@ -95,16 +95,11 @@ function srtToAss(content: string): string {
 }
 
 export async function generateEpisodeSubtitles(episodeId: number, dramaId: number): Promise<string> {
-  const [drama] = await db.select({ metadata: schema.dramas.metadata })
-    .from(schema.dramas)
-    .where(eq(schema.dramas.id, dramaId))
+  const { drama, storyboards } = await getMergeInputs(requireCurrentTenant(), episodeId, dramaId)
   const openingVideoUrl = getDramaVideoUrl(drama?.metadata ?? null, 'openingVideoUrl')
   const openingDuration = openingVideoUrl && fs.existsSync(toAbsPath(openingVideoUrl))
     ? await getVideoDuration(toAbsPath(openingVideoUrl))
     : 0
-  const storyboards = await db.select().from(schema.storyboards)
-    .where(eq(schema.storyboards.episodeId, episodeId))
-    .orderBy(schema.storyboards.storyboardNumber)
 
   let cursor = openingDuration
   const cues: { start: number; end: number; text: string }[] = []
@@ -134,20 +129,11 @@ export async function generateEpisodeSubtitles(episodeId: number, dramaId: numbe
  * 传入 storyboardIds 时只拼接所选镜头（仍按镜号顺序）。
  */
 export async function mergeEpisodeVideos(episodeId: number, dramaId: number, storyboardIds?: number[]): Promise<number> {
-  const [drama] = await db.select({ metadata: schema.dramas.metadata })
-    .from(schema.dramas)
-    .where(eq(schema.dramas.id, dramaId))
+  const context = requireCurrentTenant()
+  const { drama, storyboards } = await getMergeInputs(context, episodeId, dramaId, storyboardIds)
   const openingVideoUrl = getDramaVideoUrl(drama?.metadata ?? null, 'openingVideoUrl')
   const endingVideoUrl = getDramaVideoUrl(drama?.metadata ?? null, 'endingVideoUrl')
 
-  let storyboards = await db.select().from(schema.storyboards)
-    .where(eq(schema.storyboards.episodeId, episodeId))
-    .orderBy(schema.storyboards.storyboardNumber)
-
-  if (storyboardIds?.length) {
-    const allow = new Set(storyboardIds.map(Number))
-    storyboards = storyboards.filter(sb => allow.has(sb.id))
-  }
 
   // 允许部分拼接:按镜号顺序拼接已生成的镜头,未生成的跳过
   const clips = storyboards
@@ -181,27 +167,14 @@ export async function mergeEpisodeVideos(episodeId: number, dramaId: number, sto
 
   logTaskStart('MergeTask', 'episode-merge', { episodeId, dramaId, clips: videos.length, hasOpening: Boolean(openingVideoUrl), hasEnding: Boolean(endingVideoUrl) })
 
-  // 创建 merge 记录
-  const ts = now()
-  const res = await db.insert(schema.videoMerges).values({
-    episodeId,
-    dramaId,
-    title: `Episode ${episodeId} Merge`,
-    provider: 'ffmpeg',
-    model: 'ffmpeg-concat-h264-aac',
-    status: 'processing',
-    scenes: JSON.stringify(videos),
-    createdAt: ts,
-  })
-  const mergeId = getInsertId(res)
+  const mergeId = await createMerge(context, episodeId, dramaId, videos)
 
   // 异步执行
-  doMerge(mergeId, episodeId, videos).catch(async err => {
+  runWithTenant(context, () => doMerge(mergeId, episodeId, videos)).catch(async err => {
     logTaskError('MergeTask', 'episode-merge', { mergeId, episodeId, error: err.message })
-    console.error(`[Merge] Failed:`, err)
-    await db.update(schema.videoMerges)
-      .set({ status: 'failed', errorMsg: err.message })
-      .where(eq(schema.videoMerges.id, mergeId))
+    await failMerge(context, mergeId, err.message)
+  }).catch(err => {
+    logTaskError('MergeTask', 'record-failure', { mergeId, episodeId })
   })
 
   return mergeId
@@ -209,10 +182,8 @@ export async function mergeEpisodeVideos(episodeId: number, dramaId: number, sto
 
 async function doMerge(mergeId: number, episodeId: number, videos: string[]) {
   // 输出文件
-  const outputDir = path.join(STORAGE_ROOT, 'merged')
-  fs.mkdirSync(outputDir, { recursive: true })
   const outputFilename = `${uuid()}.mp4`
-  const outputPath = path.join(outputDir, outputFilename)
+  const mergedRelative = `static/merged/${outputFilename}`
   const subtitlePath = toAbsPath(subtitleAssRelativePath(episodeId))
   const hasSubtitles = fs.existsSync(subtitlePath)
 
@@ -228,15 +199,15 @@ async function doMerge(mergeId: number, episodeId: number, videos: string[]) {
   const concatInputs = videos.map((_, index) => `[v${index}][a${index}]`).join('')
   filters.push(`${concatInputs}concat=n=${videos.length}:v=1:a=1[mergedv][mergeda]`)
   if (hasSubtitles) {
-    filters.push(`[mergedv]ass=filename=${subtitlePath}:fontsdir=${path.join(DATA_ROOT, 'fonts')}[videoout]`)
+    const escapeFilterPath = (value: string) => value.replace(/\\/g, '/').replace(/:/g, '\\:').replace(/'/g, "'\\''")
+    filters.push(`[mergedv]ass=filename='${escapeFilterPath(subtitlePath)}':fontsdir='${escapeFilterPath(path.join(DATA_ROOT, 'fonts'))}'[videoout]`)
   } else {
     filters.push('[mergedv]null[videoout]')
   }
 
-  await new Promise<void>((resolve, reject) => {
-    const command = ffmpeg()
-    for (const video of videos) command.input(toAbsPath(video))
-    command
+  const command = ffmpeg()
+  for (const video of videos) command.input(toAbsPath(video))
+  command
       .complexFilter(filters)
       .outputOptions([
         '-map', '[videoout]',
@@ -247,41 +218,30 @@ async function doMerge(mergeId: number, episodeId: number, videos: string[]) {
         '-c:a', 'aac',
         '-ar', '48000',
         '-b:a', '192k',
-        '-movflags', '+faststart',
+        '-movflags', '+frag_keyframe+empty_moov',
       ])
-      .output(outputPath)
-      .on('end', () => resolve())
-      .on('error', (err) => reject(err))
-      .run()
-
+  let duration = 0
+  await writeFfmpegMedia(mergedRelative, command, 'mp4', async temporaryPath => {
+    duration = await getVideoDuration(temporaryPath)
   })
-
-  // 获取时长
-  const duration = await getVideoDuration(outputPath)
-
-  const mergedRelative = `static/merged/${outputFilename}`
 
   // 成片海报帧（导出页封面用）
   await extractVideoPoster(mergedRelative)
 
-  // 更新 merge 记录
-  await db.update(schema.videoMerges)
-    .set({ status: 'completed', mergedUrl: mergedRelative, duration, completedAt: now() })
-    .where(eq(schema.videoMerges.id, mergeId))
-
-  // 更新 episode
-  await db.update(schema.episodes)
-    .set({ videoUrl: mergedRelative, updatedAt: now() })
-    .where(eq(schema.episodes.id, episodeId))
+  await completeMerge(requireCurrentTenant(), mergeId, episodeId, mergedRelative, duration)
 
   logTaskSuccess('MergeTask', 'episode-merge', { mergeId, episodeId, output: mergedRelative, duration, clips: videos.length, hasSubtitles })
 }
 
 function getVideoDuration(filePath: string): Promise<number> {
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     ffmpeg.ffprobe(filePath, (err, metadata) => {
-      if (err) { resolve(0); return }
-      resolve(Math.round(metadata.format.duration || 0))
+      if (err) return reject(err)
+      const duration = metadata.format.duration
+      if (!duration || !Number.isFinite(duration) || duration <= 0 || !metadata.streams.some(stream => stream.codec_type === 'video')) {
+        return reject(new Error('生成视频无有效视频流或时长'))
+      }
+      resolve(Math.max(1, Math.round(duration)))
     })
   })
 }

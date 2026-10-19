@@ -23,6 +23,7 @@
         @click="pick(o.key || o.model)"
       >
         <span class="model-select-option-name">{{ o.model }}</span>
+        <span v-if="showConfig" class="opt-config">{{ o.configName }}</span>
         <template v-if="modelIconUrl(o.provider, o.model)" #trailing>
           <img :src="modelIconUrl(o.provider, o.model)" class="model-select-icon sm" alt="" />
         </template>
@@ -39,7 +40,7 @@ import { modelIconUrl } from '~/composables/useProviderIcon'
 
 const props = defineProps({
   label: { type: String, required: true },          // 改写 / 图片 / 视频
-  modelValue: { type: String, default: '' },        // '' = 默认（配置首个模型）；选中值为 'provider/model' 复合键
+  modelValue: { type: String, default: '' },        // '' = 默认；模型选中值为 'configId/model' 复合键
   options: { type: Array, default: () => [] },      // [{ key, model, provider, configId, configName }]
   defaultLabel: { type: String, default: '' },      // 缺省回退 t('common.default')
   showConfig: { type: Boolean, default: false },    // 多配置时显示来源配置名
@@ -53,7 +54,11 @@ const isOpen = ref(false)
 
 const effectiveDefaultLabel = computed(() => props.defaultLabel || t('common.default'))
 const currentOption = computed(() => props.options.find(o => (o.key || o.model) === props.modelValue) || null)
-const currentLabel = computed(() => currentOption.value?.model || effectiveDefaultLabel.value)
+const currentLabel = computed(() => {
+  if (currentOption.value) return currentOption.value.model
+  if (props.modelValue) return props.modelValue.slice(props.modelValue.indexOf('/') + 1)
+  return effectiveDefaultLabel.value
+})
 // 默认 = 首个选项；未显式选模型时也展示默认模型的厂商图标（与 defaultLabel 取 options[0] 同口径）
 // 图标按模型名推断（网关 provider=openai 但模型实为 deepseek 等场景），回退 provider
 const defaultIcon = computed(() => modelIconUrl(props.options[0]?.provider, props.options[0]?.model))
@@ -69,6 +74,7 @@ function pick(model) {
 </script>
 
 <style scoped>
+.opt-config { color: var(--text-3); font-size: 10px; overflow-wrap: anywhere; }
 .model-select {
   display: flex;
   align-items: center;

@@ -4,10 +4,8 @@
  */
 import { createTool } from '@mastra/core/tools'
 import { z } from 'zod'
-import { db, schema } from '../../db/index.js'
-import { eq } from 'drizzle-orm'
-import { now } from '../../utils/response.js'
-import { getEpisodeId } from '../context.js'
+import { getEpisodeId, getDramaId, getAgentTenantContext } from '../context.js'
+import { requireAgentEpisode, saveAgentScript } from '../../data/tenant/agent-scripts.js'
 
 const readEpisodeScript = createTool({
   id: 'read_episode_script',
@@ -16,8 +14,7 @@ const readEpisodeScript = createTool({
   execute: async (_input, context) => {
     const episodeId = getEpisodeId(context?.requestContext)
     if (!episodeId) return { error: 'Missing episodeId in request context' }
-    const [ep] = await db.select().from(schema.episodes)
-      .where(eq(schema.episodes.id, episodeId))
+    const ep = await requireAgentEpisode(getAgentTenantContext(context?.requestContext), episodeId, getDramaId(context?.requestContext)!)
     if (!ep) return { error: `Episode not found (id=${episodeId})` }
     const content = ep.content || ep.scriptContent
     if (!content) return { error: `Episode has no content (id=${episodeId})` }
@@ -34,8 +31,7 @@ const rewriteToScreenplay = createTool({
   execute: async ({ instructions }, context) => {
     const episodeId = getEpisodeId(context?.requestContext)
     if (!episodeId) return { error: 'Missing episodeId in request context' }
-    const [ep] = await db.select().from(schema.episodes)
-      .where(eq(schema.episodes.id, episodeId))
+    const ep = await requireAgentEpisode(getAgentTenantContext(context?.requestContext), episodeId, getDramaId(context?.requestContext)!)
     if (!ep) return { error: `Episode not found` }
     const source = ep.content || ep.scriptContent
     if (!source) return { error: `Episode has no content to rewrite` }
@@ -67,9 +63,7 @@ const saveScript = createTool({
   execute: async ({ content }, context) => {
     const episodeId = getEpisodeId(context?.requestContext)
     if (!episodeId) return { error: 'Missing episodeId in request context' }
-    await db.update(schema.episodes)
-      .set({ scriptContent: content, updatedAt: now() })
-      .where(eq(schema.episodes.id, episodeId))
+    await saveAgentScript(getAgentTenantContext(context?.requestContext), episodeId, getDramaId(context?.requestContext)!, content)
 
     return { message: `Script saved`, word_count: content.length }
   },

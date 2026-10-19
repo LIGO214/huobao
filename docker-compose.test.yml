@@ -1,0 +1,19 @@
+services:
+  postgres:
+    image: postgres:17-bookworm
+    environment:
+      POSTGRES_USER: huobao_test
+      POSTGRES_PASSWORD: ${HUOBAO_TEST_POSTGRES_PASSWORD:?Set a password for the isolated test PostgreSQL}
+      POSTGRES_DB: postgres
+    ports:
+      - "127.0.0.1:${HUOBAO_TEST_POSTGRES_PORT:-55432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U huobao_test -d postgres"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+    volumes:
+      - huobao-test-postgres:/var/lib/postgresql/data
+
+volumes:
+  huobao-test-postgres:

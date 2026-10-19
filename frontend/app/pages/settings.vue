@@ -85,12 +85,13 @@
             </div>
             <p class="setup-desc">
               {{ t('settings.ai.quickDesc') }}
-              <a class="huobao-site-link" href="https://api.firemux.com" target="_blank" rel="noopener noreferrer">
+              <a class="huobao-site-link" href="/console/token" target="_blank" rel="noopener noreferrer">
                 {{ t('settings.ai.getKey') }}
                 <ExternalLink :size="12" :stroke-width="1.8" />
               </a>
             </p>
             <div class="huobao-quick-row">
+              <input v-model="huobaoBaseUrl" class="input" type="url" aria-label="Base URL" placeholder="Base URL" />
               <input v-model="huobaoApiKey" class="input" type="password" placeholder="Qunl API Key" />
               <button class="btn btn-primary" :disabled="huobaoSaving" @click="applyHuobaoQuickConfig">
                 <Loader2 v-if="huobaoSaving" :size="13" class="animate-spin" />
@@ -149,7 +150,7 @@
                 <div class="config-main">
                   <div class="config-line">
                     <span class="config-name">{{ c.name || `${c.provider}-${c.service_type}` }}</span>
-                    <span :class="['tag', c.api_key ? 'tag-success' : 'tag-error']">{{ c.api_key ? t('settings.ai.hasKey') : t('settings.ai.noKey') }}</span>
+                    <span :class="['tag', c.has_api_key ? 'tag-success' : 'tag-error']">{{ c.has_api_key ? t('settings.ai.hasKey') : t('settings.ai.noKey') }}</span>
                     <span v-if="!c.is_active" class="tag">{{ t('settings.common.disabled') }}</span>
                   </div>
                   <div class="config-models">
@@ -198,17 +199,18 @@
                 <div class="config-line">
                   <span class="config-name">{{ p.name }}</span>
                   <span class="tag mono">{{ p.value }}</span>
+                  <span v-if="p.read_only" class="tag">{{ t('agentCustomization.builtIn') }}</span>
                   <span v-if="!p.is_active" class="tag">{{ t('settings.common.disabled') }}</span>
                 </div>
                 <div class="config-sub mono truncate">{{ p.prompt }}</div>
                 <div v-if="p.description" class="config-sub truncate">{{ p.description }}</div>
               </div>
-              <label class="config-switch">
+              <label v-if="!p.read_only" class="config-switch">
                 <input type="checkbox" class="sr-only" :checked="p.is_active" @change="toggleStyle(p)">
                 <span class="switch" :class="{ on: p.is_active }"></span>
               </label>
-              <button class="btn btn-ghost btn-icon btn-sm" @click="startEditStyle(p)"><Pencil :size="13" /></button>
-              <button class="btn btn-danger btn-icon btn-sm" @click="styleToDelete = p"><Trash2 :size="13" /></button>
+              <button v-if="!p.read_only" class="btn btn-ghost btn-icon btn-sm" @click="startEditStyle(p)"><Pencil :size="13" /></button>
+              <button v-if="!p.read_only" class="btn btn-danger btn-icon btn-sm" @click="styleToDelete = p"><Trash2 :size="13" /></button>
             </div>
             <p v-if="!stylePresets.length" class="config-empty">{{ t('settings.styles.empty') }}</p>
           </section>
@@ -336,138 +338,7 @@
           <p v-else class="config-empty">{{ t('settings.about.serverNote') }}</p>
         </div>
 
-        <!-- ===== Agent 配置（左侧 tab 切换，Prompt 与 Skills 整合在同一 Agent 下） ===== -->
-        <div v-else-if="tab === 'agents'" class="skills-layout">
-          <!-- Agent 左侧 tab 列表 -->
-          <aside class="skills-agent-list">
-            <div class="skills-agent-title">{{ t('settings.skills.agentList') }}</div>
-            <button
-              v-for="a in agentDefs"
-              :key="a.type"
-              :class="['skills-agent-item', { active: selectedAgent === a.type }]"
-              @click="selectAgent(a.type)"
-            >
-              <span class="agent-type-badge">{{ a.icon }}</span>
-              <span class="skills-agent-label">{{ a.label }}</span>
-              <span v-if="agentSkillCount(a.type) > 0" class="skill-count-badge">{{ agentSkillCount(a.type) }}</span>
-            </button>
-          </aside>
-
-          <!-- 右侧主区域 -->
-          <div class="settings-scroll skills-main">
-            <div class="settings-head skills-head">
-              <span class="agent-type-badge skills-head-badge">{{ selectedAgentIcon }}</span>
-              <div class="skills-head-copy">
-                <h2 class="settings-title">{{ selectedAgentLabel }}</h2>
-                <div class="dim" style="font-size:12px;margin-top:2px;display:flex;align-items:center;gap:6px">
-                  {{ selectedAgentType }}
-                  <span v-if="getAgentCfg(selectedAgent) && !getAgentCfg(selectedAgent).is_default" class="tag tag-success">{{ t('settings.common.custom') }}</span>
-                  <span v-else class="tag">{{ t('common.default') }}</span>
-                </div>
-              </div>
-              <button v-if="agentPane === 'skills'" class="btn btn-primary btn-sm ml-auto" @click="startAddSkill">
-                <Plus :size="13" /> {{ t('settings.skills.add') }}
-              </button>
-            </div>
-
-            <!-- Prompt 面板（子 tab 作为卡片头，与卡片同宽对齐） -->
-            <div v-if="agentPane === 'prompt'" class="card agent-card">
-              <div class="agent-pane-tabs">
-                <div class="agent-pane-tabs-nav">
-                  <button :class="['agent-pane-tab', { active: agentPane === 'prompt' }]" @click="agentPane = 'prompt'">System Prompt</button>
-                  <button :class="['agent-pane-tab', { active: agentPane === 'skills' }]" @click="agentPane = 'skills'">
-                    Skills<template v-if="agentSkillCount(selectedAgent) > 0"> ({{ agentSkillCount(selectedAgent) }})</template>
-                  </button>
-                </div>
-                <span class="agent-lang-follow dim">
-                  {{ t('settings.agents.followContentLang', { lang: contentLangLabel }) }}
-                </span>
-              </div>
-              <div class="agent-card-body">
-                <label class="field">
-                  <span class="field-label">System Prompt <span class="dim">({{ t('settings.agents.promptHint', { file: promptFileName }) }})</span>
-                    <span v-if="agentPromptFallback" class="tag agent-fallback-tag">{{ t('settings.agents.langFallback') }}</span>
-                  </span>
-                  <textarea v-model="agentForm.system_prompt" class="textarea agent-prompt-input" rows="16" :placeholder="t('settings.agents.promptPlaceholder')" />
-                </label>
-                <div class="agent-card-foot">
-                  <button class="btn btn-ghost btn-sm" @click="resetAgentPrompt(selectedAgent)">{{ t('settings.agents.reset') }}</button>
-                  <span v-if="agentSaved === selectedAgent" class="tag tag-success" style="margin-left:8px">
-                    <Check :size="10" /> {{ t('common.saved') }}
-                  </span>
-                  <button class="btn btn-primary btn-sm ml-auto" :disabled="agentSaving" @click="saveAgentCfg(selectedAgent)">
-                    <Loader2 v-if="agentSaving" :size="12" class="animate-spin" />
-                    {{ t('common.save') }}
-                  </button>
-                </div>
-              </div>
-            </div>
-
-            <!-- Skills 面板（子 tab 同为卡片头） -->
-            <template v-else>
-              <div class="agent-pane-tabs-wrap card">
-                <div class="agent-pane-tabs">
-                  <div class="agent-pane-tabs-nav">
-                    <button :class="['agent-pane-tab', { active: agentPane === 'prompt' }]" @click="agentPane = 'prompt'">System Prompt</button>
-                    <button :class="['agent-pane-tab', { active: agentPane === 'skills' }]" @click="agentPane = 'skills'">
-                      Skills<template v-if="agentSkillCount(selectedAgent) > 0"> ({{ agentSkillCount(selectedAgent) }})</template>
-                    </button>
-                  </div>
-                  <span class="agent-lang-follow dim">
-                    {{ t('settings.agents.followContentLang', { lang: contentLangLabel }) }}
-                  </span>
-                </div>
-              </div>
-              <p class="settings-desc" style="margin-top:0">{{ t('settings.skills.desc') }}</p>
-
-              <!-- 无 skill 提示 -->
-              <div v-if="!currentSkills.length" class="card skills-empty">
-                <div class="skills-empty-icon">
-                  <FileText :size="24" />
-                </div>
-                <div class="skills-empty-title">{{ t('settings.skills.emptyTitle') }}</div>
-                <div class="skills-empty-desc">{{ t('settings.skills.emptyDesc') }}</div>
-              </div>
-
-              <!-- Skill 列表 -->
-              <div class="skill-list" v-else>
-                <div v-for="s in currentSkills" :key="s.id" class="card skill-card">
-                  <div class="skill-card-head" @click="toggleSkillEdit(s.id)">
-                    <FileText :size="14" style="color:var(--accent);flex-shrink:0" />
-                    <div style="flex:1;min-width:0">
-                      <div style="font-weight:600;font-size:13px">{{ s.name }}</div>
-                      <div class="dim" style="font-size:11px">{{ s.description }}</div>
-                    </div>
-                    <button class="btn btn-danger btn-icon btn-sm" style="margin-right:4px" @click.stop="skillToDelete = s.id">
-                      <Trash2 :size="13" />
-                    </button>
-                    <ChevronDown :size="14" :style="{ transform: editingSkill === s.id ? 'rotate(180deg)' : '', transition: '0.2s' }" />
-                  </div>
-                  <div v-if="editingSkill === s.id" class="skill-card-body">
-                    <textarea
-                      v-model="skillContent"
-                      class="textarea mono skill-content-input"
-                      rows="20"
-                      style="font-size:12px;line-height:1.6"
-                      :placeholder="t('settings.skills.contentPlaceholder')"
-                    />
-                    <div class="skill-card-foot">
-                      <span class="dim" style="font-size:11px">skills/{{ s.id }}/{{ skillFileName }}</span>
-                      <span v-if="skillContentFallback" class="tag agent-fallback-tag">{{ t('settings.agents.langFallback') }}</span>
-                      <span v-if="skillSaved === s.id" class="tag tag-success" style="margin-left:8px">
-                        <Check :size="10" /> {{ t('common.saved') }}
-                      </span>
-                      <button class="btn btn-primary btn-sm ml-auto" :disabled="skillSaving" @click="saveSkill(s.id)">
-                        <Loader2 v-if="skillSaving" :size="12" class="animate-spin" />
-                        {{ t('common.save') }}
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </template>
-          </div>
-        </div>
+        <AgentCustomizations v-else-if="tab === 'agents'" :language="contentLanguage" />
       </div>
     </div>
 
@@ -505,7 +376,7 @@
             <input v-model.number="cfgForm.priority" class="input" type="number" min="0" max="999" />
             <span class="field-hint">{{ t('settings.cfg.priorityHint') }}</span>
           </label>
-          <label class="field"><span class="field-label">API Key</span><input v-model="cfgForm.api_key" class="input" type="password" placeholder="sk-..." /></label>
+          <label class="field"><span class="field-label">API Key</span><input v-model="cfgForm.api_key" class="input" type="password" :placeholder="cfgEditId ? t('settings.ai.keepKey') : 'sk-...'" autocomplete="new-password" /></label>
           <label class="field"><span class="field-label">Base URL</span><input v-model="cfgForm.base_url" class="input" placeholder="https://..." /></label>
           <label class="field"><span class="field-label">{{ t('settings.cfg.models') }}</span><input v-model="cfgForm.modelStr" class="input" placeholder="model-name" /></label>
           <label v-if="cfgForm.service_type === 'text'" class="field">
@@ -529,33 +400,6 @@
           </button>
           <button type="button" class="btn" @click="cfgDialog = false">{{ t('common.cancel') }}</button>
           <button type="submit" class="btn btn-primary">{{ t('common.save') }}</button>
-        </div>
-      </form>
-    </div>
-
-    <!-- Add Skill Dialog -->
-    <div v-if="addSkillDialog" class="overlay" @click.self="addSkillDialog = false">
-      <form class="dialog skill-dialog" @submit.prevent="confirmAddSkill">
-        <div class="dialog-head">
-          <div class="dialog-title">{{ t('settings.skills.addTitle', { agent: selectedAgentLabel }) }}</div>
-        </div>
-        <div class="dialog-body skill-dialog-body">
-          <label class="field">
-            <span class="field-label">{{ t('settings.skills.dirName') }} <span class="dim">({{ t('settings.skills.dirNameHint') }})</span></span>
-            <input v-model="newSkillForm.id" class="input" :placeholder="t('settings.skills.dirNamePlaceholder')" />
-          </label>
-          <label class="field">
-            <span class="field-label">{{ t('settings.skills.name') }}</span>
-            <input v-model="newSkillForm.name" class="input" :placeholder="t('settings.skills.namePlaceholder')" />
-          </label>
-          <label class="field">
-            <span class="field-label">{{ t('settings.skills.description') }}</span>
-            <input v-model="newSkillForm.description" class="input" :placeholder="t('settings.skills.descPlaceholder')" />
-          </label>
-        </div>
-        <div class="dialog-foot">
-          <button type="button" class="btn" @click="addSkillDialog = false">{{ t('common.cancel') }}</button>
-          <button type="submit" class="btn btn-primary" :disabled="!newSkillForm.id">{{ t('settings.skills.create') }}</button>
         </div>
       </form>
     </div>
@@ -638,14 +482,6 @@
       @confirm="confirmDelStyle"
       @cancel="styleToDelete = null"
     />
-    <ConfirmDialog
-      :open="!!skillToDelete"
-      :title="t('settings.skillDelete.title')"
-      :message="t('settings.skillDelete.message', { id: skillToDelete })"
-      :loading="deletingSkill"
-      @confirm="confirmDelSkill"
-      @cancel="skillToDelete = null"
-    />
   </div>
 </template>
 
@@ -655,7 +491,7 @@ import BaseSelect from '~/components/BaseSelect.vue'
 import { toast } from 'vue-sonner'
 import { toastError } from '~/composables/useToast'
 import { useI18n } from 'vue-i18n'
-import { aiConfigAPI, promptAPI, skillsAPI, storageAPI, stylePresetAPI, settingsAPI, serverUpdateAPI } from '~/composables/useApi'
+import { aiConfigAPI, storageAPI, stylePresetAPI, settingsAPI, serverUpdateAPI } from '~/composables/useApi'
 import { useDesktopBridge } from '~/composables/useDesktopBridge'
 import { useMigrateState } from '~/composables/useMigrateState'
 import { useTheme } from '~/composables/useTheme'
@@ -683,6 +519,7 @@ const cfgEditId = ref(null)
 const cfgTesting = ref(false)
 const cfgTestResult = ref(null)
 const huobaoApiKey = ref('')
+const huobaoBaseUrl = ref(import.meta.client ? window.location.origin : '')
 const huobaoSaving = ref(false)
 const cfgForm = reactive({ name: '', provider: '', api_key: '', base_url: '', modelStr: '', service_type: 'text', priority: 0, temperature: '' })
 // 服务类型 label/desc 渲染时求值（语言切换即时生效），type 为逻辑值
@@ -714,13 +551,9 @@ const providerPresets = {
   },
 }
 const huobaoQuickConfigs = [
-  { service_type: 'text', provider: 'gemini', name: 'Qunl 文本服务 · Gemini', base_url: 'https://api.firemux.com', model: ['gemini-3.1-pro-preview', 'gemini-3.5-flash', 'gemini-3-flash-preview'], priority: 100 },
-  { service_type: 'text', provider: 'openai', name: 'Qunl 文本服务 · OpenAI', base_url: 'https://api.firemux.com', model: ['deepseek-v4-pro', 'deepseek-v4-flash', 'gpt-5.6-terra'], priority: 101 },
-  { service_type: 'image', provider: 'openai', name: 'Qunl 图片服务 · OpenAI', base_url: 'https://api.firemux.com', model: ['gpt-image-2'], priority: 99 },
-  { service_type: 'image', provider: 'gemini', name: 'Qunl 图片服务 · Gemini', base_url: 'https://api.firemux.com', model: ['gemini-3-pro-image', 'gemini-3.1-flash-image'], priority: 97 },
-  { service_type: 'video', provider: 'volcengine', name: 'Qunl 视频服务 · Seedance', base_url: 'https://api.firemux.com/volcengine', model: ['doubao-seedance-2-0-mini-260615', 'doubao-seedance-2-0-fast-260128', 'doubao-seedance-2-0-260128'], priority: 98 },
-  { service_type: 'video', provider: 'aliyun', name: 'Qunl 视频服务 · Wan 3.0', base_url: 'https://api.firemux.com/qwen', model: ['wan3.0-video-prime', 'wan3.0-video'], priority: 97 },
-  { service_type: 'video', provider: 'minimax', name: 'Qunl 视频服务 · MiniMax', base_url: 'https://api.firemux.com/minimax', model: ['MiniMax-H3'], priority: 96 },
+  { service_type: 'text', provider: 'openai', name: 'Qunl 文本服务 · OpenAI', model: ['gpt-5.6-terra'], priority: 101 },
+  { service_type: 'image', provider: 'openai', name: 'Qunl 图片服务 · OpenAI', model: ['gpt-image-2'], priority: 99 },
+  { service_type: 'video', provider: 'volcengine', name: 'Qunl 视频服务 · Seedance', model: ['dreamina-seedance-2-0-mini-260615'], priority: 98 },
 ]
 
 function byType(t) { return cfgs.value.filter(c => c.service_type === t) }
@@ -774,16 +607,22 @@ async function setDefaultModel(type, c, m) {
     defaultSaving.value = false
   }
 }
-async function toggleCfg(c) { await aiConfigAPI.update(c.id, { is_active: !c.is_active }); loadCfgs() }
-async function delCfg(id) { await aiConfigAPI.del(id); toast.success(t('index.deleted')); loadCfgs() }
+async function toggleCfg(c) {
+  try { await aiConfigAPI.update(c.id, { is_active: !c.is_active }); await loadCfgs() }
+  catch (e) { toastError(e) }
+}
+async function delCfg(id) {
+  try { await aiConfigAPI.del(id); toast.success(t('index.deleted')); await loadCfgs() }
+  catch (e) { toastError(e) }
+}
 async function applyHuobaoQuickConfig() {
   const apiKey = huobaoApiKey.value.trim()
   if (!apiKey) { toast.warning(t('settings.ai.apiKeyRequired')); return }
   huobaoSaving.value = true
   try {
     for (const preset of huobaoQuickConfigs) {
-      const payload = { ...preset, api_key: apiKey }
-      const existing = cfgs.value.find(c => c.name === preset.name || (c.service_type === preset.service_type && c.provider === preset.provider && c.base_url === preset.base_url))
+      const payload = { ...preset, base_url: huobaoBaseUrl.value.trim(), api_key: apiKey }
+      const existing = cfgs.value.find(c => c.name === preset.name)
       if (existing) await aiConfigAPI.update(existing.id, payload)
       else await aiConfigAPI.create(payload)
     }
@@ -810,7 +649,7 @@ function startEditCfg(c) {
   Object.assign(cfgForm, {
     name: c.name || '',
     provider: c.provider,
-    api_key: c.api_key || '',
+    api_key: '',
     base_url: c.base_url || '',
     modelStr: fmtModel(c.model),
     service_type: c.service_type,
@@ -835,7 +674,8 @@ async function testDraftCfg() {
   await testCfgPayload({
     service_type: cfgForm.service_type,
     provider: cfgForm.provider,
-    api_key: cfgForm.api_key,
+    ...(cfgForm.api_key.trim() ? { api_key: cfgForm.api_key.trim() } : {}),
+    ...(cfgEditId.value ? { config_id: cfgEditId.value } : {}),
     base_url: cfgForm.base_url,
     model: cfgForm.modelStr.split(',').map(s => s.trim()).filter(Boolean),
   })
@@ -845,7 +685,7 @@ async function testExistingCfg(c) {
   await testCfgPayload({
     service_type: c.service_type,
     provider: c.provider,
-    api_key: c.api_key || '',
+    config_id: c.id,
     base_url: c.base_url || '',
     model: Array.isArray(c.model) ? c.model : [],
   })
@@ -858,91 +698,14 @@ async function saveCfg() {
     toast.warning(t('settings.cfg.tempInvalid')); return
   }
   try {
-    if (cfgEditId.value) await aiConfigAPI.update(cfgEditId.value, { name: cfgForm.name, provider: cfgForm.provider, api_key: cfgForm.api_key, base_url: cfgForm.base_url, model: models, priority: cfgForm.priority, temperature })
-    else await aiConfigAPI.create({ service_type: cfgForm.service_type, provider: cfgForm.provider, name: cfgForm.name || `${cfgForm.provider}-${cfgForm.service_type}`, api_key: cfgForm.api_key, base_url: cfgForm.base_url, model: models, priority: cfgForm.priority, temperature })
+    const payload = { name: cfgForm.name || `${cfgForm.provider}-${cfgForm.service_type}`, provider: cfgForm.provider,
+      base_url: cfgForm.base_url, model: models, priority: cfgForm.priority, temperature,
+      ...(cfgForm.api_key.trim() ? { api_key: cfgForm.api_key.trim() } : {}) }
+    if (cfgEditId.value) await aiConfigAPI.update(cfgEditId.value, payload)
+    else await aiConfigAPI.create({ ...payload, service_type: cfgForm.service_type })
     cfgDialog.value = false; toast.success(t('common.saved')); loadCfgs()
   } catch (e) { toastError(e) }
 }
-
-// ===== Agent Configs =====
-const agentCfgs = ref([])
-const agentPane = ref('prompt')   // 右侧子 tab：prompt | skills
-const agentSaving = ref(false)
-const agentSaved = ref(null)
-const agentForm = reactive({ system_prompt: '' })
-
-const agentDefs = computed(() => [
-  { type: 'script_rewriter', label: t('settings.agents.scriptRewriter'), icon: '📝' },
-  { type: 'extractor', label: t('settings.agents.extractor'), icon: '🔍' },
-  { type: 'storyboard_breaker', label: t('settings.agents.storyboardBreaker'), icon: '🎬' },
-  { type: 'prompt_generator', label: t('settings.agents.promptGenerator'), icon: '🖼' },
-])
-
-function getAgentCfg(type) {
-  return agentCfgs.value.find(a => a.agent_type === type)
-}
-
-
-async function loadAgents() {
-  try { agentCfgs.value = await promptAPI.list() }
-  catch (e) { toastError(e) }
-}
-
-async function loadAgentPrompt(type) {
-  try {
-    const cfg = await promptAPI.get(type, editLang.value)
-    if (selectedAgent.value === type) {
-      agentForm.system_prompt = cfg.system_prompt || ''
-      agentPromptFallback.value = editLang.value !== 'zh' && !!cfg.is_default
-    }
-    agentSaved.value = null
-  } catch (e) { toastError(e) }
-}
-
-async function resetAgentPrompt(type) {
-  try {
-    await promptAPI.reset(type, editLang.value)
-    await loadAgents()
-    const cfg = await promptAPI.get(type, editLang.value)
-    agentForm.system_prompt = cfg.system_prompt || ''
-    agentPromptFallback.value = editLang.value !== 'zh' && !!cfg.is_default
-    toast.success(t('settings.agents.promptReset'))
-  } catch (e) { toastError(e) }
-}
-
-async function saveAgentCfg(type) {
-  agentSaving.value = true
-  agentSaved.value = null
-  try {
-    await promptAPI.update(type, {
-      name: agentDefs.value.find(a => a.type === type)?.label || type,
-      system_prompt: agentForm.system_prompt,
-    }, editLang.value)
-    await loadAgents()
-    agentPromptFallback.value = false
-    agentSaved.value = type
-    toast.success(t('settings.agents.saved', { agent: agentDefs.value.find(a => a.type === type)?.label }))
-    setTimeout(() => { if (agentSaved.value === type) agentSaved.value = null }, 3000)
-  } catch (e) {
-    toastError(e)
-  } finally {
-    agentSaving.value = false
-  }
-}
-
-// ===== Skills =====
-const selectedAgent = ref('script_rewriter')
-const allSkills = ref([])   // { id, name, description }[]
-const editingSkill = ref(null)
-const skillContent = ref('')
-const skillSaving = ref(false)
-const skillSaved = ref(null)
-const addSkillDialog = ref(false)
-const newSkillForm = reactive({ id: '', name: '', description: '' })
-
-const selectedAgentType = computed(() => selectedAgent.value)
-const selectedAgentLabel = computed(() => agentDefs.value.find(a => a.type === selectedAgent.value)?.label || '')
-const selectedAgentIcon = computed(() => agentDefs.value.find(a => a.type === selectedAgent.value)?.icon || '')
 
 // ===== 通用：AI 内容语言（全局设置，与界面语言相互独立） =====
 const contentLanguage = ref('zh')
@@ -952,19 +715,6 @@ const contentLangOptions = [
   { value: 'ja', label: '日本語', shortLabel: '日本語' },
   { value: 'ko', label: '한국어', shortLabel: '한국어' },
 ]
-// ===== Agent 配置：prompt/skill 编辑的语言版本（只读跟随内容语言） =====
-const agentPromptFallback = ref(false)   // 当前语言无独立 prompt 文件，展示的是回退内容
-const skillContentFallback = ref(false)  // 同上，skill 编辑器
-const promptFileName = computed(() => `workspace/prompts/${selectedAgent.value}${editLang.value !== 'zh' ? `.${editLang.value}` : ''}.md`)
-const skillFileName = computed(() => `SKILL${editLang.value !== 'zh' ? `.${editLang.value}` : ''}.md`)
-
-// Agent 编辑语言 = 全局内容语言的只读镜像（改语言请到「通用」页）
-const editLang = computed(() => contentLanguage.value)
-const contentLangLabel = computed(() =>
-  contentLangOptions.find(l => l.value === contentLanguage.value)?.label || contentLanguage.value)
-
-// 内容语言变化时同步刷新 Agent 面板（提示词、Skill 列表与展开内容）
-// 内容语言切换后整页刷新（setUnifiedLanguage），无需局部 watch 同步
 // ===== 通用：外观主题（localStorage 持久化，即时生效） =====
 const { themeMode, setThemeMode } = useTheme()
 const themeOptions = computed(() => [
@@ -977,7 +727,6 @@ async function loadContentLanguage() {
   try {
     const lang = (await settingsAPI.contentLanguage())?.language || 'zh'
     contentLanguage.value = lang
-    editLang.value = lang  // Agent 编辑器默认跟随内容语言
   } catch { /* 保持默认 */ }
 }
 async function setContentLanguage(lang) {
@@ -986,102 +735,6 @@ async function setContentLanguage(lang) {
   await confirmUnifiedLanguage(lang)
 }
 onMounted(loadContentLanguage)
-
-// agent type 用下划线（script_rewriter），skill 目录按 Mastra 规范用连字符（script-rewriter）
-const skillDirOf = (type) => type.replace(/_/g, '-')
-const skillBelongsTo = (skillId, type) => {
-  const dir = skillDirOf(type)
-  return skillId === dir || skillId.startsWith(dir + '/')
-}
-
-function agentSkillCount(type) {
-  return allSkills.value.filter(s => skillBelongsTo(s.id, type)).length
-}
-
-const currentSkills = computed(() =>
-  allSkills.value.filter(s => skillBelongsTo(s.id, selectedAgent.value))
-)
-
-async function loadAllSkills() {
-  try { allSkills.value = await skillsAPI.list(editLang.value) }
-  catch (e) { toastError(e) }
-}
-
-async function selectAgent(type) {
-  if (selectedAgent.value !== type) {
-    selectedAgent.value = type
-    editingSkill.value = null
-  }
-  await loadAgentPrompt(type)
-}
-
-function startAddSkill() {
-  newSkillForm.id = ''
-  newSkillForm.name = ''
-  newSkillForm.description = ''
-  addSkillDialog.value = true
-}
-
-async function confirmAddSkill() {
-  if (!newSkillForm.id) return
-  const skillId = `${skillDirOf(selectedAgent.value)}/${newSkillForm.id}`
-  try {
-    await skillsAPI.create({ id: skillId, name: newSkillForm.name, description: newSkillForm.description })
-    addSkillDialog.value = false
-    await loadAllSkills()
-    toast.success(t('settings.skills.created'))
-  } catch (e) {
-    toastError(e)
-  }
-}
-
-const skillToDelete = ref(null)
-const deletingSkill = ref(false)
-
-async function confirmDelSkill() {
-  const id = skillToDelete.value
-  if (!id) return
-  try {
-    deletingSkill.value = true
-    await skillsAPI.del(id)
-    if (editingSkill.value === id) editingSkill.value = null
-    await loadAllSkills()
-    skillToDelete.value = null
-    toast.success(t('index.deleted'))
-  } catch (e) {
-    toastError(e)
-  } finally {
-    deletingSkill.value = false
-  }
-}
-
-async function toggleSkillEdit(id) {
-  if (editingSkill.value === id) { editingSkill.value = null; return }
-  try {
-    const res = await skillsAPI.get(id, editLang.value)
-    skillContent.value = res.content
-    skillContentFallback.value = editLang.value !== 'zh' && !!res.is_default
-    skillSaved.value = null
-    editingSkill.value = id
-  } catch (e) { toastError(e) }
-}
-
-async function saveSkill(id) {
-  skillSaving.value = true
-  skillSaved.value = null
-  try {
-    await skillsAPI.update(id, skillContent.value, editLang.value)
-    await loadAllSkills()
-    skillContentFallback.value = false
-    skillSaved.value = id
-    toast.success(t('common.saved'))
-    setTimeout(() => { if (skillSaved.value === id) skillSaved.value = null }, 3000)
-  } catch (e) {
-    toastError(e)
-  } finally {
-    skillSaving.value = false
-  }
-}
 
 // ===== Style Presets =====
 const stylePresets = ref([])
@@ -1162,7 +815,7 @@ async function saveStyle() {
   } catch (e) { toastError(e) }
 }
 
-onMounted(() => { loadCfgs(); loadAgents(); loadAllSkills(); loadAgentPrompt(selectedAgent.value); loadStylePresets() })
+onMounted(() => { loadCfgs(); loadStylePresets() })
 
 // ===== 应用内引导（设置页）：快捷配置 + 手动模板两步 =====
 const SETTINGS_TOUR = [
@@ -1322,11 +975,6 @@ async function applyUpdate() {
 
 watch(tab, (t) => {
   if (t === 'about') refreshUpdateState()
-  // 进入 Agent 页总是按当前内容语言重载（幂等）：兜住「先切语言、后进 Agent」的时序
-  if (t === 'agents') {
-    loadAgentPrompt(selectedAgent.value)
-    loadAllSkills()
-  }
 })
 
 onBeforeUnmount(stopUsagePoll)
@@ -1385,7 +1033,7 @@ onBeforeUnmount(stopUsagePoll)
 .huobao-site-link:hover { text-decoration: underline; }
 .huobao-quick-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
   gap: 10px;
 }
 .huobao-quick-models {
@@ -1726,5 +1374,18 @@ onBeforeUnmount(stopUsagePoll)
   border-radius: 3px;
   background: var(--accent);
   transition: width 0.2s ease;
+}
+@media (max-width: 640px) {
+  .huobao-quick-row { grid-template-columns: minmax(0, 1fr); }
+  .config-row { flex-wrap: wrap; }
+  .config-main { min-width: 150px; }
+  .config-line { flex-wrap: wrap; }
+  .settings-layout { flex-direction: column; min-width: 0; }
+  .settings-nav { width: 100%; padding: 8px; border-right: 0; border-bottom: 1px solid var(--border); overflow-x: auto; }
+  .nav-group { flex-direction: row; width: max-content; }
+  .nav-group-label { display: none; }
+  .nav-item { width: auto; flex-shrink: 0; white-space: nowrap; }
+  .settings-scroll { padding: 16px 16px 32px; }
+  .field-row { grid-template-columns: minmax(0, 1fr); }
 }
 </style>

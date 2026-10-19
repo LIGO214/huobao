@@ -53,6 +53,7 @@
           />
         </div>
         <div class="studio-actions">
+          <QunlReturnLink />
           <LocaleSwitcher />
           <button class="btn btn-icon tour-help-btn" :title="t('tour.helpTitle')" @click="startTour('episode', EPISODE_TOUR, t)">
             <CircleHelp :size="14" :stroke-width="1.8" />
@@ -799,6 +800,11 @@
                 <!-- 分镜时长 + 生成操作常驻底部：不随检查器内容滚动 -->
                 <div class="video-inspector-footer">
                   <section class="video-inspector-section video-params-card">
+                    <fieldset class="video-param-row video-generation-mode">
+                      <legend class="video-param-name">{{ t('episode.vid.generationMode') }}</legend>
+                      <label><input type="radio" name="video-generation-mode" value="text" checked />{{ t('episode.vid.textMode') }}</label>
+                      <label :title="t('episode.vid.referencesUnavailable')"><input type="radio" name="video-generation-mode" value="reference" disabled />{{ t('episode.vid.referenceModeUnavailable') }}</label>
+                    </fieldset>
                     <div class="video-param-row">
                       <span class="video-param-name">{{ t('episode.inspector.duration') }}</span>
                       <span class="video-param-control">
@@ -1620,12 +1626,17 @@ const imageConfigs = ref([])
 const videoConfigs = ref([])
 const textConfigs = ref([])
 // 生成时可选模型：空串 = 跟随配置默认（models[0]）；选择持久化到 localStorage，刷新页面后保留
-const MODEL_STORE_KEYS = { chat: 'huobao:model:chat', image: 'huobao:model:image', video: 'huobao:model:video' }
+const MODEL_STORE_PREFIX = `huobao:drama:${dramaId}:episode:${episodeNumber}:model`
+const MODEL_STORE_KEYS = {
+  chat: `${MODEL_STORE_PREFIX}:chat`,
+  image: `${MODEL_STORE_PREFIX}:image`,
+  video: `${MODEL_STORE_PREFIX}:video`,
+}
 function readStoredModel(key, legacyKey = '') {
   try { return localStorage.getItem(key) || (legacyKey && localStorage.getItem(legacyKey)) || '' } catch { return '' }
 }
 // 顶栏文本模型：适用于所有 Chat Agent 调用（改写/提取/拆镜/视频提示词/最终提示词），空串 = 跟随配置默认
-const chatModel = ref(readStoredModel(MODEL_STORE_KEYS.chat, 'huobao:model:rewrite'))
+const chatModel = ref(readStoredModel(MODEL_STORE_KEYS.chat))
 const imageModel = ref(readStoredModel(MODEL_STORE_KEYS.image))
 const videoModel = ref(readStoredModel(MODEL_STORE_KEYS.video))
 function persistModel(modelRef, key) {
@@ -2073,7 +2084,6 @@ function videoTaskActionLabel(sb) {
 
 const allVideoTaskRows = computed(() => sbs.value.map((sb, index) => {
   const duration = Number(sb.duration || 5)
-  const referenceCount = getShotReferenceImages(sb).length
   const sceneName = getSceneName(sb)
   return {
     id: sb.id,
@@ -2082,7 +2092,6 @@ const allVideoTaskRows = computed(() => sbs.value.map((sb, index) => {
     title: sb.description || t('episode.vid.shotN', { n: String(index + 1).padStart(2, '0') }),
     meta: sceneName,
     duration: Number.isFinite(duration) ? duration : 5,
-    referenceCount,
     state: videoTaskState(sb),
     // 只有当前处于失败状态才显示错误,避免重试成功的分镜残留历史错误信息
     error: videoTaskState(sb) === 'failed' ? videoFailMessage(sb.id) : '',
@@ -2175,15 +2184,14 @@ function configModels(cfg) {
   if (Array.isArray(raw)) return raw.filter(Boolean)
   try { const m = JSON.parse(raw); return Array.isArray(m) ? m.filter(Boolean) : [m].filter(Boolean) } catch { return [raw].filter(Boolean) }
 }
-// 汇总该类型全部启用配置的模型（按 厂商+模型 去重，按优先级排序），选中模型时连同所属配置一起调用
-// 选中值使用 'provider/model' 复合键：同名模型可能来自不同厂商（如中转站与官方），必须区分
+// 按配置 ID 与模型区分选项；同协议同模型也可能使用不同 Key。
 function collectModelOptions(cfgs) {
   const seen = new Set()
   const out = []
   const sorted = [...cfgs].filter(c => c.is_active).sort((a, b) => (b.priority || 0) - (a.priority || 0))
   for (const c of sorted) {
     for (const m of configModels(c)) {
-      const key = `${c.provider}/${m}`
+      const key = `${c.id}/${m}`
       if (seen.has(key)) continue
       seen.add(key)
       out.push({ key, model: m, provider: c.provider, configId: c.id, configName: c.name || c.provider })
@@ -2198,7 +2206,12 @@ function bareModelName(key) {
   return i >= 0 ? key.slice(i + 1) : key
 }
 function ownerConfigId(options, key) {
-  return key ? (options.find(o => o.key === key)?.configId || undefined) : undefined
+  if (!key) return undefined
+  const selected = options.find(o => o.key === key)
+  if (selected) return selected.configId
+  // 失效选择仍提交原 ID，由后端拒绝，不能静默改用默认 Key。
+  const id = Number(key.slice(0, key.indexOf('/')))
+  return Number.isSafeInteger(id) && id > 0 ? id : -1
 }
 function hasMultiConfigs(options) {
   return new Set(options.map(o => o.configId)).size > 1
@@ -2217,9 +2230,6 @@ const selectedVideoConfig = computed(() => {
 })
 const isWan3Video = computed(() => selectedVideoConfig.value?.provider === 'aliyun'
   || bareModelName(videoModel.value).startsWith('wan3.0-video'))
-
-// 参考图上限（Wan 3.0 官方 10 张，其他模型 9 张），绑定素材收集与 @名字 映射统一读取
-const refImageLimit = computed(() => isWan3Video.value ? 10 : 9)
 
 // 本次生成的生效配置（模型/分辨率/时长），用于右侧小结与批量确认弹窗
 const effectiveVideoModelLabel = computed(() => {
@@ -2268,14 +2278,14 @@ function confirmBatchVideos() {
   if (videoSelectMode.value) toggleVideoSelectMode()
 }
 
-// 配置变化后校验持久化的模型是否仍存在（配置被删/模型被移除时回退默认，避免把失效模型传给后端）
+// 仅升级可唯一识别的旧选择；失效选择保留，不自动切换配置。
 function pruneStaleModel(modelRef, optionsRef) {
   watch(optionsRef, opts => {
     if (!modelRef.value || !opts.length) return
     if (opts.some(o => o.key === modelRef.value)) return
-    // 旧版本地存储只有裸模型名：能对上则升级为复合键，对不上回退默认
+    // 旧版本地存储只有裸模型名。
     const legacy = opts.filter(o => o.model === modelRef.value)
-    modelRef.value = legacy.length ? legacy[0].key : ''
+    if (legacy.length === 1) modelRef.value = legacy[0].key
   }, { immediate: true })
 }
 pruneStaleModel(chatModel, textModelOptions)
@@ -3159,33 +3169,6 @@ function formatHistoryTime(iso) {
   return `${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`
 }
 
-function getShotReferenceImages(sb) {
-  const refs = []
-  const pushRef = (value) => {
-    if (!value || refs.includes(value) || refs.length >= refImageLimit.value) return
-    refs.push(value)
-  }
-  const scene = getStoryboardScene(sb)
-  pushRef(videoReferenceImage(scene))
-  for (const char of getStoryboardCharacters(sb)) {
-    pushRef(videoReferenceImage(char))
-  }
-  for (const prop of getStoryboardProps(sb)) {
-    pushRef(videoReferenceImage(prop))
-  }
-  return refs
-}
-
-function usesSeedanceAssetLibrary() {
-  return /^(dreamina|doubao)-seedance-2-0/i.test(bareModelName(videoModel.value) || '')
-}
-
-function videoReferenceImage(asset) {
-  const imageUrl = asset?.image_url || asset?.imageUrl || ''
-  const seedanceAssetUrl = asset?.seedance_asset_url || asset?.seedanceAssetUrl || ''
-  return usesSeedanceAssetLibrary() && /^asset:\/\//i.test(seedanceAssetUrl) ? seedanceAssetUrl : imageUrl
-}
-
 // 右侧参考素材面板：本集全部可绑定素材（场景单选、角色/道具多选），bound 标记是否已绑定
 // kind 为英文 code（逻辑值）；typeLabel 为显示名（渲染时求值）
 function shotBindableAssets(sb) {
@@ -3297,44 +3280,6 @@ const mentionOptions = computed(() => {
   ]
 })
 
-// 按参考图顺序（场景图在前、角色图居中、道具图在后）为 @名字 建立索引映射，供视频提示词引用替换
-function getShotReferenceIndexMap(sb) {
-  const ordered = []
-  const seen = new Set()
-  const push = (name, url) => {
-    if (!url || seen.has(url) || ordered.length >= refImageLimit.value) return
-    seen.add(url)
-    ordered.push({ name, imageUrl: url })
-  }
-  const scene = getStoryboardScene(sb)
-  push(scene?.location || '', videoReferenceImage(scene))
-  for (const char of getStoryboardCharacters(sb)) {
-    push(char.name || '', videoReferenceImage(char))
-  }
-  for (const prop of getStoryboardProps(sb)) {
-    push(prop.name || '', videoReferenceImage(prop))
-  }
-  const nameToIndex = {}
-  ordered.forEach((a, i) => { if (a.name && !(a.name in nameToIndex)) nameToIndex[a.name] = i + 1 })
-  return nameToIndex
-}
-
-// 将视频提示词里的 @名字 替换为 @图片N名字（N 为参考图序号，1 起），生成时使用
-function resolveVideoPromptRefs(sb) {
-  const prompt = sb.video_prompt || sb.videoPrompt || ''
-  const map = getShotReferenceIndexMap(sb)
-  const names = Object.keys(map).sort((a, b) => b.length - a.length)
-  if (!names.length) return prompt
-  return prompt.replace(/@([^\s@]+)/g, (m, raw) => {
-    for (const name of names) {
-      if (raw.startsWith(name)) {
-        return `@图片${map[name]}${name}${raw.slice(name.length)}`
-      }
-    }
-    return m
-  })
-}
-
 // 分镜时长（视频生成参数区直接编辑并保存到分镜）：
 // 按当前视频模型限制范围收敛后写入 storyboards.duration，列表/批量/单次生成统一读取该值
 function onVideoDurationChange(e) {
@@ -3388,21 +3333,18 @@ function uploadAssetImage(kind, id) {
 }
 
 async function genVid(sb, opts = {}) {
-  const referenceImages = getShotReferenceImages(sb)
-  // 参考素材完全来自分镜绑定的角色/场景/道具图片
   const params = {
     storyboard_id: sb.id,
     drama_id: dramaId,
-    prompt: resolveVideoPromptRefs(sb),
+    prompt: sb.video_prompt || sb.videoPrompt || '',
     duration: Number(sb.duration || 10),
     aspect_ratio: dramaAspectRatio.value,
     generate_audio: true,
     model: bareModelName(videoModel.value) || undefined,
     config_id: ownerConfigId(videoModelOptions.value, videoModel.value),
-    reference_image_urls: referenceImages,
   }
-  if (!params.prompt && !referenceImages.length) {
-    toast.error(t('episode.vid.needRefOrPrompt'))
+  if (!params.prompt.trim()) {
+    toast.error(t('episode.vid.needPrompt'))
     return
   }
   try {
@@ -3533,6 +3475,7 @@ onMounted(() => setTimeout(() => autoTour('episode', EPISODE_TOUR, t), 900))
 
 .studio-topbar {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
@@ -3604,7 +3547,7 @@ onMounted(() => setTimeout(() => autoTour('episode', EPISODE_TOUR, t), 900))
 .studio-title {
   font-size: 13px;
   line-height: 1;
-  letter-spacing: -0.04em;
+  letter-spacing: 0;
   white-space: nowrap;
 }
 
@@ -3659,13 +3602,19 @@ onMounted(() => setTimeout(() => autoTour('episode', EPISODE_TOUR, t), 900))
 .studio-topbar-side {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 6px;
-  flex-shrink: 0;
+  min-width: 0;
+  max-width: 100%;
+  margin-left: auto;
 }
 
 .studio-actions {
   display: flex;
+  align-items: center;
+  flex-wrap: wrap;
   gap: 6px;
+  max-width: 100%;
 }
 .studio-topbar .btn {
   height: 26px;
@@ -4536,6 +4485,9 @@ onMounted(() => setTimeout(() => autoTour('episode', EPISODE_TOUR, t), 900))
 .studio-model-picks {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
+  min-width: 0;
+  max-width: 100%;
   gap: 12px;
   margin-right: 12px;
   padding-right: 12px;
@@ -4778,6 +4730,11 @@ onMounted(() => setTimeout(() => autoTour('episode', EPISODE_TOUR, t), 900))
   background: var(--surface-raised);
 }
 /* 生成前检查动线集中一屏：上双栏（画面描述/氛围 ｜ 参考绑定），下整宽（视频提示词） */
+.video-param-row.video-generation-mode { margin: 0; padding: 0; border: 0; min-width: 0; flex-wrap: wrap; gap: 8px; white-space: normal; }
+.video-generation-mode legend { margin-bottom: 8px; }
+.video-generation-mode label { display: inline-flex; align-items: center; min-width: 0; gap: 5px; font-size: 12px; overflow-wrap: anywhere; }
+.video-generation-mode input { flex-shrink: 0; }
+.video-generation-mode label:has(input:disabled) { color: var(--text-2); }
 .video-main-grid {
   display: grid;
   grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr);
@@ -5048,9 +5005,7 @@ button.video-task-metric.on { box-shadow: 0 0 0 2px var(--accent); }
   font-weight: 600;
   line-height: 1.4;
   text-align: center;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  overflow-wrap: anywhere;
 }
 /* 生成参数：强调卡片，时长是当前分镜生成的核心参数 */
 .video-params-card {
@@ -5283,7 +5238,7 @@ button.video-task-metric.on { box-shadow: 0 0 0 2px var(--accent); }
 .video-inspector-params dt { color: var(--text-3); }
 .video-inspector-params dd { margin: 0; color: var(--text-1); text-align: right; }
 .video-inspector-action { width: 100%; min-height: 32px; height: 32px; padding: 0 12px; font-size: 12.5px; }
-/* 绑定参考图：当前分镜已绑定素材的图片平铺（生成时作为参考图提交） */
+/* 展示分镜绑定的素材；文生视频只提交提示词，不自动附带图片。 */
 .video-bound-refs { display: grid; grid-template-columns: repeat(auto-fill, minmax(64px, 1fr)); gap: 8px; }
 .video-bound-ref {
   position: relative;
@@ -5945,16 +5900,27 @@ button.video-task-metric.on { box-shadow: 0 0 0 2px var(--accent); }
 .dim { color: var(--text-3); }
 
 @media (max-width: 1080px) {
-  .studio-body {
-    grid-template-columns: 1fr;
-  }
-
   .video-task-workbench.has-player {
-    grid-template-columns: var(--vleft, 208px) minmax(0, 1fr);
+    grid-template-columns: 180px minmax(0, 1fr);
   }
 
   .video-task-side {
-    grid-template-columns: minmax(0, 1fr) var(--vright, 260px);
+    display: flex;
+    flex-direction: column;
+    overflow-y: auto;
+  }
+
+  .video-col-divider { display: none; }
+
+  .video-main-col,
+  .video-task-side .video-task-inspector {
+    flex: none;
+    overflow: visible;
+  }
+
+  .video-main-scroll,
+  .video-inspector-body {
+    overflow: visible;
   }
 
   .video-main-grid {
@@ -6117,6 +6083,13 @@ button.video-task-metric.on { box-shadow: 0 0 0 2px var(--accent); }
   .studio {
     padding: 8px;
     gap: 8px;
+    overflow-y: auto;
+  }
+
+  .studio-body {
+    display: flex;
+    flex-direction: column;
+    flex: none;
   }
 
   .studio-topbar-main {
@@ -6130,10 +6103,82 @@ button.video-task-metric.on { box-shadow: 0 0 0 2px var(--accent); }
 
   .studio-topbar-side {
     justify-content: space-between;
+    margin-left: 0;
   }
 
-  .sidebar {
-    max-height: 340px;
+  .studio-title {
+    white-space: normal;
+    overflow-wrap: anywhere;
+    line-height: 1.3;
+    letter-spacing: 0;
+  }
+
+  .studio-meta-row,
+  .studio-model-picks {
+    flex-wrap: wrap;
+  }
+
+  .studio-model-picks {
+    min-width: 0;
+    max-width: 100%;
+    margin-right: 0;
+    padding-right: 0;
+    border-right: 0;
+  }
+
+  .sidebar,
+  .sidebar.collapsed {
+    width: auto;
+    flex: none;
+  }
+
+  .pipeline,
+  .sidebar.collapsed .pipeline {
+    flex-direction: row;
+    overflow-x: auto;
+    padding: 8px;
+    gap: 8px;
+  }
+
+  .pipe-section {
+    flex: 1;
+    min-width: 100px;
+  }
+
+  .sidebar.collapsed .pipe-section-label {
+    justify-content: flex-start;
+  }
+
+  .sidebar.collapsed .pipe-section-label > span:not(.pipe-section-state) {
+    display: inline;
+  }
+
+  .sidebar.collapsed .pipe-item {
+    grid-template-columns: auto minmax(0, 1fr);
+    justify-content: normal;
+    padding: 5px 8px;
+    min-height: 34px;
+  }
+
+  .sidebar.collapsed .pipe-item .pipe-copy {
+    display: flex;
+  }
+
+  .sidebar-bottom {
+    display: none;
+  }
+
+  .main,
+  .content-panel,
+  .prod-content {
+    flex: none;
+    overflow: visible;
+  }
+
+  .prod-section-bar > .flex {
+    width: 100%;
+    flex-wrap: wrap;
+    margin-left: 0;
   }
 
   .studio-topbar-side,
@@ -6173,9 +6218,15 @@ button.video-task-metric.on { box-shadow: 0 0 0 2px var(--accent); }
     flex-direction: column;
   }
 
-  .video-task-workbench {
+  .video-task-workbench,
+  .video-task-workbench.has-player {
     grid-template-columns: 1fr;
-    overflow-y: auto;
+    flex: none;
+    overflow: visible;
+  }
+
+  .video-task-list {
+    max-height: 300px;
   }
 
   /* 窄屏纵向堆叠后无栏间分界，隐藏拖拽分隔条 */
@@ -6189,11 +6240,12 @@ button.video-task-metric.on { box-shadow: 0 0 0 2px var(--accent); }
   .video-task-side {
     display: flex;
     flex-direction: column;
+    overflow: visible;
     border-top: 1px solid var(--surface-outline);
     border-left: 0;
   }
 
-  /* 窄屏：中列改为纵向堆叠，由外层 workbench 整体滚动 */
+  /* 窄屏只由 studio 纵向滚动，编辑区与生成参数按内容撑开。 */
   .video-main-col {
     display: flex;
     flex-direction: column;
@@ -6206,7 +6258,7 @@ button.video-task-metric.on { box-shadow: 0 0 0 2px var(--accent); }
   }
 
   .video-task-side .video-task-inspector {
-    flex: none; /* 窄屏下由外层 workbench 整体滚动，检查器按内容撑开，不参与 flex 收缩 */
+    flex: none;
     border-top: 0;
     display: flex;
     flex-direction: column;

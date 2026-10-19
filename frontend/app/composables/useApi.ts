@@ -9,7 +9,7 @@ async function req<T = any>(method: string, path: string, body?: any): Promise<T
   if (body) opts.body = JSON.stringify(body)
 
   const start = performance.now()
-  console.log(`%c[API] %c${method} %c${path}`, 'color:#888', 'color:#4fc3f7;font-weight:bold', 'color:#ccc', body || '')
+  console.log(`[API] ${method} ${path}`)
 
   try {
     const resp = await fetch(`${apiBase()}${path}`, opts)
@@ -152,16 +152,24 @@ const langQ = (lang?: string) => (lang && lang !== 'zh' ? `?lang=${lang}` : '')
 
 export const promptAPI = {
   list: () => api.get('/prompts'),
-  get: (type: string, lang?: string) => api.get(`/prompts/${type}${langQ(lang)}`),
-  update: (type: string, d: any, lang?: string) => api.put(`/prompts/${type}${langQ(lang)}`, d),
+  get: (type: string, lang?: string) => api.get<AgentPrompt>(`/prompts/${type}${langQ(lang)}`),
+  update: (type: string, d: { user_prompt: string }, lang?: string) => api.put<{ user_prompt: string }>(`/prompts/${type}${langQ(lang)}`, d),
   reset: (type: string, lang?: string) => api.post(`/prompts/${type}/reset${langQ(lang)}`),
 }
 
+export type AgentPrompt = { system_prompt: string; user_prompt: string; max_length: number }
+export type AgentSkill = {
+  id: string; agent_type: string; name: string; is_default: boolean
+  content?: string; enabled?: boolean; sort_order?: number
+}
+export type SkillLimits = { max_length: number; max_count: number; total_length: number }
+type SkillListing = { built_in: AgentSkill[]; user: AgentSkill[]; limits: SkillLimits }
+
 export const skillsAPI = {
-  list: (lang?: string) => api.get(`/skills${langQ(lang)}`),
-  get: (id: string, lang?: string) => api.get(`/skills/${id}${langQ(lang)}`),
-  create: (data: { id: string; name: string; description?: string }) => api.post('/skills', data),
-  update: (id: string, content: string, lang?: string) => api.put(`/skills/${id}${langQ(lang)}`, { content }),
+  list: () => api.get<SkillListing>('/skills'),
+  get: (id: string, lang?: string) => api.get<AgentSkill & { content: string }>(`/skills/${id}${langQ(lang)}`),
+  create: (data: { agent_type: string; name: string; content: string; enabled?: boolean; sort_order?: number }) => api.post<AgentSkill>('/skills', data),
+  update: (id: string, data: { name?: string; content?: string; enabled?: boolean; sort_order?: number }) => api.put<AgentSkill>(`/skills/${id}`, data),
   del: (id: string) => api.del(`/skills/${id}`),
 }
 

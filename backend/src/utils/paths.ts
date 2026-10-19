@@ -10,14 +10,26 @@
  */
 import path from 'path'
 import { fileURLToPath } from 'url'
+import { appConfig } from '../config/env.js'
+import { requireCurrentTenant } from '../security/tenant-runtime.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 // src/utils → 上三级为仓库根
 const repoRoot = path.resolve(__dirname, '../../..')
 
-export const DATA_ROOT = process.env.HUOBAO_DATA_DIR
+export const DATA_ROOT = appConfig.dataDir
   ?? (process.env.STORAGE_PATH
     ? path.dirname(path.resolve(process.env.STORAGE_PATH))
     : path.join(repoRoot, 'data'))
 
 export const STORAGE_ROOT = process.env.STORAGE_PATH ?? path.join(DATA_ROOT, 'static')
+
+export function getTenantStorageRoot(): string {
+  const tenant = requireCurrentTenant()
+  return path.join(DATA_ROOT, 'users', String(tenant.userId), 'static')
+}
+
+export function getTenantDataRoot(): string {
+  const tenant = requireCurrentTenant()
+  return path.join(DATA_ROOT, 'users', String(tenant.userId))
+}

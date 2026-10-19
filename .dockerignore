@@ -12,8 +12,15 @@ release
 
 # 运行时数据（绝不能进镜像：SQLite + 生成的媒体文件）
 data
+tmp
+temp
 
 # 本地环境
 .env
+**/.env
+**/.env.*
+output
+**/.tmp-*
+**/.playwright-cli
 *.log
 .DS_Store

@@ -10,42 +10,10 @@
 import { createTool } from '@mastra/core/tools'
 import type { ToolExecutionContext } from '@mastra/core/tools'
 import { z } from 'zod'
-import { db, getInsertId, schema } from '../../db/index.js'
-import { eq, and } from 'drizzle-orm'
-import { now } from '../../utils/response.js'
+import { listAgentCharacters, listAgentScenes, listAgentProps, saveAgentCharacter, saveAgentScene, saveAgentProp } from '../../data/tenant/agent-assets.js'
+import { requireAgentEpisode } from '../../data/tenant/agent-scripts.js'
 import { logTaskProgress, logTaskSuccess } from '../../utils/task-logger.js'
-import { getDramaId, getEpisodeId } from '../context.js'
-
-// ─── 关联辅助 ────────────────────────────────────────────────
-async function linkCharToEpisode(episodeId: number, characterId: number) {
-  const ts = now()
-  const existing = await db.select().from(schema.episodeCharacters)
-    .where(and(eq(schema.episodeCharacters.episodeId, episodeId), eq(schema.episodeCharacters.characterId, characterId)))
-
-  if (!existing.length) {
-    await db.insert(schema.episodeCharacters).values({ episodeId, characterId, createdAt: ts })
-  }
-}
-
-async function linkSceneToEpisode(episodeId: number, sceneId: number) {
-  const ts = now()
-  const existing = await db.select().from(schema.episodeScenes)
-    .where(and(eq(schema.episodeScenes.episodeId, episodeId), eq(schema.episodeScenes.sceneId, sceneId)))
-
-  if (!existing.length) {
-    await db.insert(schema.episodeScenes).values({ episodeId, sceneId, createdAt: ts })
-  }
-}
-
-async function linkPropToEpisode(episodeId: number, propId: number) {
-  const ts = now()
-  const existing = await db.select().from(schema.episodeProps)
-    .where(and(eq(schema.episodeProps.episodeId, episodeId), eq(schema.episodeProps.propId, propId)))
-
-  if (!existing.length) {
-    await db.insert(schema.episodeProps).values({ episodeId, propId, createdAt: ts })
-  }
-}
+import { getDramaId, getEpisodeId, getAgentTenantContext } from '../context.js'
 
 // ─── 名字归一化（近名去重） ───────────────────────────────────
 // 提取时同一角色/道具可能出现不同书写形式（如「林小雨」与「林小雨（主角）」、
@@ -82,8 +50,7 @@ const readScriptForExtraction = createTool({
     const ids = requireIds(context)
     if ('error' in ids) return ids
     const { episodeId, dramaId } = ids
-    const [ep] = await db.select().from(schema.episodes)
-      .where(eq(schema.episodes.id, episodeId))
+    const ep = await requireAgentEpisode(getAgentTenantContext(context?.requestContext), episodeId, dramaId)
     if (!ep) return { error: 'Episode not found' }
     const content = ep.scriptContent || ep.content
     if (!content) return { error: 'Episode has no script content' }
@@ -101,12 +68,7 @@ const readExistingCharacters = createTool({
     const ids = requireIds(context)
     if ('error' in ids) return ids
     const { episodeId, dramaId } = ids
-    const links = await db.select().from(schema.episodeCharacters)
-      .where(eq(schema.episodeCharacters.episodeId, episodeId))
-    const linkedIds = new Set(links.map(link => link.characterId))
-    const chars = (await db.select().from(schema.characters)
-      .where(eq(schema.characters.dramaId, dramaId)))
-      .filter(c => !c.deletedAt)
+    const { rows: chars, linkedIds } = await listAgentCharacters(getAgentTenantContext(context?.requestContext), episodeId, dramaId)
     const visibleChars = chars.map(c => ({
       id: c.id,
       name: c.name,
@@ -139,12 +101,7 @@ const readExistingScenes = createTool({
     const ids = requireIds(context)
     if ('error' in ids) return ids
     const { episodeId, dramaId } = ids
-    const links = await db.select().from(schema.episodeScenes)
-      .where(eq(schema.episodeScenes.episodeId, episodeId))
-    const linkedIds = new Set(links.map(link => link.sceneId))
-    const scenes = (await db.select().from(schema.scenes)
-      .where(eq(schema.scenes.dramaId, dramaId)))
-      .filter(s => !s.deletedAt)
+    const { rows: scenes, linkedIds } = await listAgentScenes(getAgentTenantContext(context?.requestContext), episodeId, dramaId)
     const visibleScenes = scenes.map(s => ({
       id: s.id,
       location: s.location,
@@ -185,7 +142,7 @@ const saveDedupCharacters = createTool({
     const ids = requireIds(context)
     if ('error' in ids) return ids
     const { episodeId, dramaId } = ids
-    const ts = now()
+    const tenant = getAgentTenantContext(context?.requestContext)
     const results = { created: 0, merged: 0 }
     logTaskProgress('ExtractTool', 'save-characters-begin', {
       episodeId,
@@ -194,9 +151,7 @@ const saveDedupCharacters = createTool({
     })
 
     for (const char of characters) {
-      const charsInProject = (await db.select().from(schema.characters)
-        .where(eq(schema.characters.dramaId, dramaId)))
-        .filter(c => !c.deletedAt)
+      const { rows: charsInProject } = await listAgentCharacters(tenant, episodeId, dramaId)
       const exact = charsInProject.find(c => c.name === char.name)
       const normName = normalizeName(char.name)
       const existing = exact || (normName ? charsInProject.find(c => c.name && normalizeName(c.name) === normName) : undefined)
@@ -206,29 +161,23 @@ const saveDedupCharacters = createTool({
         // 归一化命中：括号定位/别名等近名视作同一角色复用，避免重复创建
         if (matchedViaNorm) logTaskProgress('ExtractTool', 'save-characters-reuse', { episodeId, dramaId, extracted: char.name, reused: existing.name })
         // 已存在：合并信息，保留 ID
-        await db.update(schema.characters).set({
+        await saveAgentCharacter(tenant, episodeId, dramaId, {
+          name: existing.name,
           role: char.role || existing.role,
           description: char.description || existing.description,
           appearance: char.appearance || existing.appearance,
           styling: char.styling || char.description || existing.styling,
-          updatedAt: ts,
-        }).where(eq(schema.characters.id, existing.id))
-        await linkCharToEpisode(episodeId, existing.id)
+        }, existing.id)
         results.merged++
       } else {
         // 新增角色
-        const res = await db.insert(schema.characters).values({
+        await saveAgentCharacter(tenant, episodeId, dramaId, {
           name: char.name,
           role: char.role || '',
           description: char.description || '',
           appearance: char.appearance || '',
           styling: char.styling || char.description || '',
-          dramaId,
-          createdAt: ts,
-          updatedAt: ts,
         })
-        const charId = getInsertId(res)
-        await linkCharToEpisode(episodeId, charId)
         results.created++
       }
     }
@@ -259,7 +208,7 @@ const saveDedupScenes = createTool({
     const ids = requireIds(context)
     if ('error' in ids) return ids
     const { episodeId, dramaId } = ids
-    const ts = now()
+    const tenant = getAgentTenantContext(context?.requestContext)
     const results = { created: 0, reused: 0 }
     logTaskProgress('ExtractTool', 'save-scenes-begin', {
       episodeId,
@@ -269,34 +218,26 @@ const saveDedupScenes = createTool({
 
     for (const scene of scenes) {
       // 按地点+时间段精确匹配；地点仅做空白/大小写归一化（不删括号，避免误合并）
-      const scenesInProject = (await db.select().from(schema.scenes)
-        .where(eq(schema.scenes.dramaId, dramaId)))
-        .filter(s => !s.deletedAt)
+      const { rows: scenesInProject } = await listAgentScenes(tenant, episodeId, dramaId)
       const normLocation = normalizeLocation(scene.location)
       const existing = scenesInProject.find(s => s.location === scene.location && s.time === (scene.time || ''))
         || (normLocation ? scenesInProject.find(s => normalizeLocation(s.location) === normLocation && s.time === (scene.time || '')) : undefined)
 
       if (existing) {
         // 已存在完全匹配的场景：关联并补齐描述/光影
-        await db.update(schema.scenes).set({
+        await saveAgentScene(tenant, episodeId, dramaId, {
+          location: existing.location, time: existing.time,
           prompt: scene.prompt || scene.description || existing.prompt,
           lighting: scene.lighting || existing.lighting,
-          updatedAt: ts,
-        }).where(eq(schema.scenes.id, existing.id))
-        await linkSceneToEpisode(episodeId, existing.id)
+        }, existing.id)
         results.reused++
       } else {
-        const res = await db.insert(schema.scenes).values({
-          dramaId,
+        await saveAgentScene(tenant, episodeId, dramaId, {
           location: scene.location,
           time: scene.time || '',
           prompt: scene.prompt || scene.description || scene.location,
           lighting: scene.lighting || '',
-          createdAt: ts,
-          updatedAt: ts,
         })
-        const sceneId = getInsertId(res)
-        await linkSceneToEpisode(episodeId, sceneId)
         results.created++
       }
     }
@@ -319,12 +260,7 @@ const readExistingProps = createTool({
     const ids = requireIds(context)
     if ('error' in ids) return ids
     const { episodeId, dramaId } = ids
-    const links = await db.select().from(schema.episodeProps)
-      .where(eq(schema.episodeProps.episodeId, episodeId))
-    const linkedIds = new Set(links.map(link => link.propId))
-    const props = (await db.select().from(schema.props)
-      .where(eq(schema.props.dramaId, dramaId)))
-      .filter(p => !p.deletedAt)
+    const { rows: props, linkedIds } = await listAgentProps(getAgentTenantContext(context?.requestContext), episodeId, dramaId)
     const visibleProps = props.map(p => ({
       id: p.id,
       name: p.name,
@@ -362,7 +298,7 @@ const saveDedupProps = createTool({
     const ids = requireIds(context)
     if ('error' in ids) return ids
     const { episodeId, dramaId } = ids
-    const ts = now()
+    const tenant = getAgentTenantContext(context?.requestContext)
     const results = { created: 0, merged: 0 }
     logTaskProgress('ExtractTool', 'save-props-begin', {
       episodeId,
@@ -371,9 +307,7 @@ const saveDedupProps = createTool({
     })
 
     for (const prop of props) {
-      const propsInProject = (await db.select().from(schema.props)
-        .where(eq(schema.props.dramaId, dramaId)))
-        .filter(p => !p.deletedAt)
+      const { rows: propsInProject } = await listAgentProps(tenant, episodeId, dramaId)
       const exact = propsInProject.find(p => p.name === prop.name)
       const normName = normalizeName(prop.name)
       const existing = exact || (normName ? propsInProject.find(p => p.name && normalizeName(p.name) === normName) : undefined)
@@ -383,25 +317,19 @@ const saveDedupProps = createTool({
         // 归一化命中：括号定位/别名等近名视作同一道具复用
         if (matchedViaNorm) logTaskProgress('ExtractTool', 'save-props-reuse', { episodeId, dramaId, extracted: prop.name, reused: existing.name })
         // 已存在：合并信息，保留 ID；物品外貌变更后旧的最终提示词失效
-        await db.update(schema.props).set({
+        await saveAgentProp(tenant, episodeId, dramaId, {
+          name: existing.name,
           type: prop.type || existing.type,
           description: prop.description || existing.description,
           finalPrompt: prop.description ? null : existing.finalPrompt,
-          updatedAt: ts,
-        }).where(eq(schema.props.id, existing.id))
-        await linkPropToEpisode(episodeId, existing.id)
+        }, existing.id)
         results.merged++
       } else {
-        const res = await db.insert(schema.props).values({
+        await saveAgentProp(tenant, episodeId, dramaId, {
           name: prop.name,
           type: prop.type || '',
           description: prop.description || '',
-          dramaId,
-          createdAt: ts,
-          updatedAt: ts,
         })
-        const propId = getInsertId(res)
-        await linkPropToEpisode(episodeId, propId)
         results.created++
       }
     }

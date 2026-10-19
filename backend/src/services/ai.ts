@@ -1,10 +1,12 @@
 /**
  * AI 服务抽象层 — 从数据库配置中获取 provider 和 API key
  */
-import { db, schema } from '../db/index.js'
-import { eq } from 'drizzle-orm'
 import { logTaskProgress, logTaskWarn } from '../utils/task-logger.js'
 import { joinProviderUrl } from './adapters/url.js'
+import { listModelConfigs, requireModelConfig } from '../data/tenant/model-configs.js'
+import { requireCurrentTenant } from '../security/tenant-runtime.js'
+import { invalidInput } from '../data/errors.js'
+import { supportedProviders, isSupportedProvider } from '../data/system/model-provider-rules.js'
 
 export type ServiceType = 'text' | 'image' | 'video'
 
@@ -28,16 +30,8 @@ export function parseConfigTemperature(settingsRaw: string | null | undefined): 
   }
 }
 
-export const officialProviders: Record<ServiceType, readonly string[]> = {
-  text: ['openai', 'gemini', 'volcengine'],
-  image: ['openai', 'gemini', 'volcengine'],
-  video: ['volcengine', 'minimax', 'aliyun'],
-}
-
-export function isOfficialProvider(serviceType?: string | null, provider?: string | null): boolean {
-  const providers = officialProviders[serviceType as ServiceType]
-  return !!providers && providers.includes((provider || '').toLowerCase())
-}
+export const officialProviders = supportedProviders
+export const isOfficialProvider = isSupportedProvider
 
 export function getTextProviderBaseUrl(config: AIConfig) {
   const provider = config.provider.toLowerCase()
@@ -62,9 +56,7 @@ const lastLoggedActiveConfigKey = new Map<string, string>()
 const lastLoggedConfigByIdKey = new Map<number, string>()
 
 export async function getActiveConfig(serviceType: ServiceType): Promise<AIConfig | null> {
-  const rows = (await db.select().from(schema.aiServiceConfigs)
-    .where(eq(schema.aiServiceConfigs.serviceType, serviceType))
-  )
+  const rows = (await listModelConfigs(requireCurrentTenant(), serviceType))
     .filter(r => r.isActive && isOfficialProvider(serviceType, r.provider))
     .sort((a, b) => (b.priority || 0) - (a.priority || 0)) // 高优先级优先
 
@@ -75,6 +67,9 @@ export async function getActiveConfig(serviceType: ServiceType): Promise<AIConfi
   }
 
   const models = active.model ? JSON.parse(active.model) : []
+  if (!Array.isArray(models) || !models.length || models.some(model => typeof model !== 'string' || !model.trim())) {
+    invalidInput('模型配置中的模型列表无效')
+  }
   const logKey = `${active.id}:${models[0] || ''}`
   if (lastLoggedActiveConfigKey.get(serviceType) !== logKey) {
     lastLoggedActiveConfigKey.set(serviceType, logKey)
@@ -105,30 +100,26 @@ export async function getTextConfig(): Promise<AIConfig> {
  * 取某服务类型当前启用且优先级最高的官方配置 ID（创建集时自动锁定用）
  */
 export async function getActiveConfigId(serviceType: ServiceType): Promise<number | null> {
-  const rows = (await db.select().from(schema.aiServiceConfigs)
-    .where(eq(schema.aiServiceConfigs.serviceType, serviceType))
-  )
+  const rows = (await listModelConfigs(requireCurrentTenant(), serviceType))
     .filter(r => r.isActive && isOfficialProvider(serviceType, r.provider))
     .sort((a, b) => (b.priority || 0) - (a.priority || 0))
   return rows[0]?.id ?? null
 }
 
-export async function getConfigById(id: number): Promise<AIConfig | null> {
-  const [row] = await db.select().from(schema.aiServiceConfigs)
-    .where(eq(schema.aiServiceConfigs.id, id))
-  if (!row || !row.isActive) {
-    logTaskWarn('AIConfig', 'config-by-id-missing', { configId: id })
-    return null
-  }
+export async function getConfigById(id: number, purpose?: ServiceType): Promise<AIConfig> {
+  const row = await requireModelConfig(requireCurrentTenant(), id, purpose, true)
   if (!isOfficialProvider(row.serviceType as ServiceType, row.provider)) {
     logTaskWarn('AIConfig', 'config-by-id-unsupported-provider', {
       configId: id,
       serviceType: row.serviceType,
       provider: row.provider,
     })
-    return null
+    invalidInput('模型配置的用途或接口协议无效')
   }
   const models = row.model ? JSON.parse(row.model) : []
+  if (!Array.isArray(models) || !models.length || models.some(model => typeof model !== 'string' || !model.trim())) {
+    invalidInput('模型配置中的模型列表无效')
+  }
   const logKey = `${row.provider}:${models[0] || ''}:${row.serviceType}`
   if (lastLoggedConfigByIdKey.get(id) !== logKey) {
     lastLoggedConfigByIdKey.set(id, logKey)

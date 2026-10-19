@@ -1,4 +1,14 @@
 {
+  "agentCustomization": {
+    "builtIn": "Built-in, read-only",
+    "builtInPrompt": "Built-in Prompt",
+    "personalPrompt": "Personal Prompt",
+    "clearPrompt": "Clear Personal Prompt",
+    "enabled": "Enabled",
+    "order": "Order",
+    "content": "Skill Content",
+    "retry": "Reload"
+  },
   "app": {
     "title": "Qunl Drama",
     "updateAvailable": "New version v{version} is available. Upgrade in Settings → About."
@@ -33,6 +43,7 @@
   },
   "layout": {
     "nav": {
+      "qunl": "Back to Qunl",
       "projects": "Projects",
       "settings": "Settings"
     },
@@ -276,7 +287,7 @@
       "quickTitle": "Qunl Quick Config",
       "recommended": "Recommended",
       "quickDesc": "Enter a Qunl API Key to write three recommended configs (text, image, video) at once.",
-      "getKey": "Get a key at api.firemux.com",
+      "getKey": "Qunl tokens",
       "applyQuick": "Apply Qunl Config",
       "manualTitle": "Manual Templates",
       "manualDesc": "Pick a service type, then fill the recommended `provider / base URL / model` from a template.",
@@ -288,6 +299,7 @@
       "noBaseUrl": "Base URL not set",
       "test": "Test",
       "apiKeyRequired": "Please enter a Qunl API Key",
+      "keepKey": "Leave blank to keep the saved key",
       "quickApplied": "Qunl quick config written",
       "defaultModelSwitched": "Default {type} model switched to {model}",
       "meta": {
@@ -740,6 +752,11 @@
       "deleteRecord": "Delete this record",
       "historyDeleted": "History record deleted",
       "needRefOrPrompt": "At least one reference asset or a video prompt is required",
+      "needPrompt": "Enter a video prompt first",
+      "referencesUnavailable": "Video references are not available yet",
+      "generationMode": "Generation mode",
+      "textMode": "Text to video",
+      "referenceModeUnavailable": "Reference video (unavailable)",
       "generating": "Video generating",
       "genDone": "Video generation complete",
       "genFailed": "Video generation failed",
@@ -770,7 +787,7 @@
       "aspectRatio": "Aspect Ratio"
     },
     "inspector": {
-      "videoPromptPlaceholder": "Reference assets with {'@'}character / {'@'}scene — auto-mapped to reference images on generation; then describe motion and camera per time segment…",
+      "videoPromptPlaceholder": "Scene, character actions, camera movement, lighting, and atmosphere...",
       "noRefs": "No reference assets bound to this shot",
       "refMedia": "Reference images / videos / audio",
       "imageN": "Image {n}",

@@ -1,12 +1,10 @@
 #!/bin/sh
-# 容器入口：workspace 模板 copy-once 到数据卷（与桌面版 userData 同一语义），然后启动后端
+# Migrate PostgreSQL before starting the single Web instance.
 set -e
 
-if [ ! -e /app/data/workspace/.template-version ]; then
-  mkdir -p /app/data/workspace
-  cp -a /app/workspace-template/. /app/data/workspace/
-  touch /app/data/workspace/.template-version
-fi
+: "${DATABASE_URL:?DATABASE_URL must point to PostgreSQL}"
+: "${HUOBAO_PROXY_SECRET:?HUOBAO_PROXY_SECRET is required}"
 
 cd /app/backend
+node_modules/.bin/tsx scripts/migrate-postgres.ts
 exec node_modules/.bin/tsx src/index.ts

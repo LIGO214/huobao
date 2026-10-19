@@ -1,0 +1,2 @@
+ALTER TABLE "episodes" ADD CONSTRAINT "episodes_user_id_image_config_id_ai_service_configs_user_id_id_fk" FOREIGN KEY ("user_id","image_config_id") REFERENCES "public"."ai_service_configs"("user_id","id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "episodes" ADD CONSTRAINT "episodes_user_id_video_config_id_ai_service_configs_user_id_id_fk" FOREIGN KEY ("user_id","video_config_id") REFERENCES "public"."ai_service_configs"("user_id","id") ON DELETE no action ON UPDATE no action;

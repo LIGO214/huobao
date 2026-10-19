@@ -1,21 +1,21 @@
 services:
   app:
-    build:
-      context: ..
-      dockerfile: Dockerfile
-      args:
-        HUOBAO_VERSION: ${HUOBAO_VERSION:-local}
-        NUXT_APP_BASE_URL: /huobao/
-        SKIP_FFMPEG_STATIC_DOWNLOAD: "true"
-    image: huobao-drama-ai:local
-    ports:
-      # The service is reachable only through the host Nginx route below.
-      - "127.0.0.1:15679:5679"
-    environment:
-      PUBLIC_BASE_URL: https://ai.qunl.com/huobao
-    volumes:
-      - huobao-ai-data:/app/data
-    restart: unless-stopped
+    extends:
+      file: ../docker-compose.yml
+      service: app
+
+  postgres:
+    extends:
+      file: ../docker-compose.yml
+      service: postgres
 
 volumes:
-  huobao-ai-data:
+  huobao-web-data:
+  huobao-postgres:
+
+networks:
+  database:
+    internal: true
+  qunl:
+    external: true
+    name: ${QUNL_DOCKER_NETWORK:?Set the existing trusted Qunl Docker network}

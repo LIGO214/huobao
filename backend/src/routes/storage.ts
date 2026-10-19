@@ -6,10 +6,10 @@
  * 过期时立即返回旧值并后台单飞重算（computing 防并发）；首次无值才同步等待。
  */
 import { Hono } from 'hono'
-import { DATA_ROOT, STORAGE_ROOT } from '../utils/paths.js'
-import { dbPath } from '../db/index.js'
+import { getTenantDataRoot } from '../utils/paths.js'
 import { dirUsage, volumeFreeBytes } from '../utils/dirsize.js'
 import { success } from '../utils/response.js'
+import { logTaskError } from '../utils/task-logger.js'
 
 const app = new Hono()
 
@@ -20,13 +20,13 @@ interface UsageCache {
   computedAt: string | null
   computing: boolean
 }
-const cache: UsageCache = { usage: null, computedAt: null, computing: false }
+const caches = new Map<string, UsageCache>()
 
-async function computeUsage() {
+async function computeUsage(cache: UsageCache, dataRoot: string) {
   if (cache.computing) return
   cache.computing = true
   try {
-    const usage = await dirUsage(DATA_ROOT, dbPath)
+    const usage = await dirUsage(dataRoot)
     cache.usage = usage
     cache.computedAt = new Date().toISOString()
   } finally {
@@ -34,34 +34,36 @@ async function computeUsage() {
   }
 }
 
-// 启动 10s 后后台预热一次，用户进设置页时大概率已命中缓存
-const warmup = setTimeout(() => { void computeUsage() }, 10_000)
-warmup.unref?.()
-
 app.get('/', async (c) => {
+  const dataRoot = getTenantDataRoot()
+  let cache = caches.get(dataRoot)
+  if (!cache) {
+    cache = { usage: null, computedAt: null, computing: false }
+    caches.set(dataRoot, cache)
+  }
   const fresh = cache.computedAt && (Date.now() - new Date(cache.computedAt).getTime()) < USAGE_TTL_MS
   let usageStale = false
   if (!fresh) {
     if (cache.usage) {
       // stale-while-revalidate：先回旧值，后台重算
       usageStale = true
-      void computeUsage()
+      void computeUsage(cache, dataRoot).catch(() => logTaskError('Storage', 'usage-refresh'))
     } else {
       // 首次无值，同步等待首算（保证进入页面必有数据）
-      await computeUsage()
+      await computeUsage(cache, dataRoot)
     }
   }
 
-  const mode = process.env.HUOBAO_DESKTOP === '1' ? 'desktop' : 'server'
   return success(c, {
-    mode,
-    dataDir: DATA_ROOT,
-    storageRoot: STORAGE_ROOT,
-    sqlitePath: dbPath,
+    mode: 'server',
+    database: 'postgresql',
+    dataDir: null,
+    storageRoot: null,
+    sqlitePath: null,
     usage: cache.usage,
     usageStale: usageStale || cache.computing,
     computedAt: cache.computedAt,
-    freeBytes: await volumeFreeBytes(DATA_ROOT),
+    freeBytes: await volumeFreeBytes(dataRoot),
   })
 })
 

@@ -13,7 +13,7 @@ test('prompt_generator video prompt format uses @name references instead of XML 
   // 场景/角色用 @名字 引用（名字必须与场景/角色列表完全一致）
   assert.match(agents, /@场景名/)
   assert.match(agents, /@角色名/)
-  assert.match(agents, /@志远 → @图片1志远/)
+  assert.match(agents, /@小明 → @图片1小明/)
   assert.doesNotMatch(agents, /<location>/)
   assert.doesNotMatch(agents, /<role>/)
 
@@ -24,11 +24,10 @@ test('prompt_generator video prompt format uses @name references instead of XML 
   assert.doesNotMatch(skill, /<location>/)
   assert.doesNotMatch(skill, /<role>/)
 
-  // settings.vue 的「恢复默认」副本同样包含新格式规范
-  assert.match(settings, /storyboard_breaker: `/)
-  assert.match(settings, /@场景名/)
-  assert.match(settings, /@角色名/)
-  assert.match(settings, /@志远 → @图片1志远/)
-  assert.doesNotMatch(settings, /<location>/)
-  assert.doesNotMatch(settings, /<role>/)
+  // Server files are the only built-in source; the UI no longer carries a reset copy.
+  const prompt = read('workspace/prompts/prompt_generator.md')
+  assert.match(prompt, /@场景名/)
+  assert.match(prompt, /@角色名/)
+  assert.match(settings, /<AgentCustomizations/)
+  assert.doesNotMatch(settings, /storyboard_breaker: `|prompt_generator: `/)
 })

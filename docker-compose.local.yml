@@ -1,0 +1,50 @@
+services:
+  app:
+    image: huobao-drama:local
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        HUOBAO_VERSION: local
+        NUXT_APP_BASE_URL: /huobao/
+        SKIP_FFMPEG_STATIC_DOWNLOAD: "true"
+        DEBIAN_MIRROR: http://mirrors.tuna.tsinghua.edu.cn
+    ports:
+      - "127.0.0.1:${HUOBAO_LOCAL_PORT:-5679}:5679"
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: ${DATABASE_URL:?Set postgres://huobao:PASSWORD@postgres:5432/huobao}
+      HUOBAO_VERSION: local
+      HUOBAO_DATA_DIR: /app/data
+      PUBLIC_BASE_URL: ${HUOBAO_PUBLIC_BASE_URL:-http://localhost:3000/huobao}
+      HUOBAO_MODEL_CONFIG_SOURCE: user
+      # 本地联调也必须启用签名校验，密钥与 Qunl 保持一致。
+      HUOBAO_PROXY_SECRET: ${HUOBAO_PROXY_SECRET:?请配置至少32字符的 HUOBAO_PROXY_SECRET}
+      HUOBAO_CORS_ORIGINS: ${HUOBAO_CORS_ORIGINS:-http://localhost:3000}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - huobao-local-web-data:/app/data
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:17-bookworm
+    environment:
+      POSTGRES_DB: huobao
+      POSTGRES_USER: huobao
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set a PostgreSQL password}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U huobao -d huobao"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    volumes:
+      - huobao-local-postgres:/var/lib/postgresql/data
+    restart: unless-stopped
+
+volumes:
+  huobao-local-web-data:
+  huobao-local-postgres:

@@ -1,6 +1,16 @@
 {
+  "agentCustomization": {
+    "builtIn": "内置只读",
+    "builtInPrompt": "内置 Prompt",
+    "personalPrompt": "个人补充 Prompt",
+    "clearPrompt": "清除个人 Prompt",
+    "enabled": "启用",
+    "order": "排序",
+    "content": "Skill 内容",
+    "retry": "重新加载"
+  },
   "app": {
-    "title": "Qunl 短剧",
+    "title": "qunl短剧",
     "updateAvailable": "发现新版本 v{version}，可在「设置 → 关于更新」中升级"
   },
   "common": {
@@ -33,6 +43,7 @@
   },
   "layout": {
     "nav": {
+      "qunl": "返回 Qunl",
       "projects": "项目",
       "settings": "设置"
     },
@@ -276,7 +287,7 @@
       "quickTitle": "Qunl 快捷配置",
       "recommended": "推荐",
       "quickDesc": "输入 Qunl API Key，一次写入文本、图片、视频三条推荐配置。",
-      "getKey": "前往 api.firemux.com 获取 Key",
+      "getKey": "Qunl 令牌",
       "applyQuick": "写入 Qunl 配置",
       "manualTitle": "手动模板",
       "manualDesc": "选择服务类型后，直接用模板填充推荐的 `provider / base URL / model`。",
@@ -288,6 +299,7 @@
       "noBaseUrl": "未设置 Base URL",
       "test": "测试",
       "apiKeyRequired": "请填写 Qunl API Key",
+      "keepKey": "留空保留已保存的 Key",
       "quickApplied": "Qunl 快捷配置已写入",
       "defaultModelSwitched": "默认{type}模型已切换为 {model}",
       "meta": {
@@ -740,6 +752,11 @@
       "deleteRecord": "删除该记录",
       "historyDeleted": "已删除该历史记录",
       "needRefOrPrompt": "需要至少一个参考素材或视频提示词",
+      "needPrompt": "请先填写视频提示词",
+      "referencesUnavailable": "视频参考素材暂未开放",
+      "generationMode": "生成方式",
+      "textMode": "文生视频",
+      "referenceModeUnavailable": "参考生视频（暂未开放）",
       "generating": "视频生成中",
       "genDone": "视频生成完成",
       "genFailed": "视频生成失败",
@@ -770,7 +787,7 @@
       "aspectRatio": "画面比例"
     },
     "inspector": {
-      "videoPromptPlaceholder": "用 {'@'}角色名 / {'@'}场景名 引用参考素材，生成时自动映射为参考图片；再按时间段描述画面运动与镜头…",
+      "videoPromptPlaceholder": "画面内容、人物动作、镜头运动、光线与氛围…",
       "noRefs": "当前分镜未绑定参考素材",
       "refMedia": "参考图片 / 视频 / 音频",
       "imageN": "图片 {n}",

@@ -14,13 +14,14 @@ import { scriptTools } from './tools/script-tools.js'
 import { extractTools } from './tools/extract-tools.js'
 import { storyboardTools } from './tools/storyboard-tools.js'
 import { imagePromptTools } from './tools/image-prompt-tools.js'
-import { loadAgentSkills, skillWorkspaces } from './skills.js'
-import { loadAgentPromptFile, loadBasePromptFile } from './prompts.js'
-import { buildLanguageDirective } from './language.js'
-import { getContentLanguageFromRC } from './context.js'
+import { loadBasePromptFile } from './prompts.js'
+import { getAgentTenantContext } from './context.js'
+import type { AgentInstructionSnapshot } from '../services/agent-instructions.js'
+import { validAgentTypes, type AgentType } from './catalog.js'
+export { validAgentTypes } from './catalog.js'
 
 // Default prompts (used when workspace/prompts/<type>.md 文件缺失时兜底)
-export const DEFAULT_PROMPTS: Record<string, { name: string; instructions: string }> = {
+export const DEFAULT_PROMPTS: Record<AgentType, { name: string; instructions: string }> = {
   script_rewriter: {
     name: '剧本改写',
     instructions: `你是专业编剧，擅长将小说改编为短剧剧本。
@@ -151,7 +152,6 @@ video_prompt 规则（硬约束）：
   },
 }
 
-export const validAgentTypes = Object.keys(DEFAULT_PROMPTS)
 
 // Agent 每一步都会重新解析模型，相同端点只打一次日志避免刷屏
 let lastLoggedTextEndpointKey = ''
@@ -285,9 +285,14 @@ function createMaxTokensFetch(providerName: string, inner?: typeof fetch): typeo
   }
 }
 
-async function getModel(fileModel: string | undefined, modelOverride?: string, textConfigId?: number) {
-  // 请求可指定文本配置（含其 provider/baseUrl/apiKey），否则回退到当前启用配置
-  const textConfig = (textConfigId ? await getConfigById(textConfigId) : null) || await getTextConfig()
+async function getModel(
+  fileModel: string | undefined,
+  modelOverride?: string,
+  textConfigId?: number,
+  requestContext?: RequestContext,
+) {
+  getAgentTenantContext(requestContext)
+  const textConfig = textConfigId !== undefined ? await getConfigById(textConfigId, 'text') : await getTextConfig()
   const modelName = modelOverride || fileModel || textConfig.model
   const providerName = textConfig.provider.toLowerCase()
   const resolvedBaseURL = getTextProviderBaseUrl(textConfig)
@@ -308,9 +313,10 @@ async function getModel(fileModel: string | undefined, modelOverride?: string, t
   const tempFetch = temperature !== null
     ? createTemperatureFetch(providerName, temperature, thinkingOffFetch)
     : thinkingOffFetch
-  const fetchImpl = isOfficialOpenAIHost(resolvedBaseURL)
+  const patchedFetch = isOfficialOpenAIHost(resolvedBaseURL)
     ? tempFetch
     : createMaxTokensFetch(providerName, tempFetch)
+  const fetchImpl: typeof fetch = (input, init) => (patchedFetch || fetch)(input, { ...init, redirect: 'error' })
 
   if (providerName === 'gemini') {
     const googleProvider = createGoogleGenerativeAI({
@@ -329,7 +335,7 @@ async function getModel(fileModel: string | undefined, modelOverride?: string, t
   return provider.chat(modelName)
 }
 
-const AGENT_TOOLS: Record<string, Record<string, any>> = {
+const AGENT_TOOLS: Record<AgentType, Record<string, any>> = {
   script_rewriter: scriptTools,
   extractor: extractTools,
   storyboard_breaker: storyboardTools,
@@ -341,18 +347,15 @@ const AGENT_TOOLS: Record<string, Record<string, any>> = {
 }
 
 /** instructions 按请求解析：prompt 文件（或默认）+ 技能全文拼接 + 目标语言指令块
- *  prompt/skill 文本随内容语言切换语言变体（<type>.<lang>.md / SKILL.<lang>.md），缺失回退中文版 */
-function buildInstructions(type: string) {
+ *  本次运行只使用启动时冻结的文本；不会在模型工具步骤之间重新读取用户配置。 */
+function buildInstructions(type: AgentType) {
   return async ({ requestContext }: { requestContext?: RequestContext }) => {
-    const defaults = DEFAULT_PROMPTS[type]
-    const lang = getContentLanguageFromRC(requestContext)
-    const promptFile = await loadAgentPromptFile(type, lang)
-    const baseInstructions = promptFile?.instructions || defaults.instructions
-    const skillInstructions = await loadAgentSkills(type, lang)
-    const languageDirective = buildLanguageDirective(lang)
-    return [baseInstructions, skillInstructions, languageDirective]
-      .filter(Boolean)
-      .join('\n\n')
+    const tenant = getAgentTenantContext(requestContext)
+    const snapshot = requestContext?.get('instructionSnapshot' as never) as AgentInstructionSnapshot | undefined
+    if (!snapshot || snapshot.userId !== tenant.userId || snapshot.requestId !== tenant.requestId || snapshot.agentType !== type) {
+      throw new Error('Agent 指令快照缺失或身份不一致')
+    }
+    return snapshot.instructions
   }
 }
 
@@ -363,11 +366,21 @@ function buildModel(type: string) {
     const promptFile = await loadBasePromptFile(type)
     const modelOverride = requestContext?.get('modelOverride' as never) as string | undefined
     const textConfigId = requestContext?.get('textConfigId' as never) as number | undefined
-    return getModel(promptFile?.model || undefined, modelOverride, textConfigId)
+    return getModel(promptFile?.model || undefined, modelOverride, textConfigId, requestContext)
   }
 }
 
 /** 启动时注册的静态 Agent 表（供 Mastra 实例挂载） */
+for (const type of validAgentTypes) {
+  const ids = new Set<string>()
+  for (const tool of Object.values(AGENT_TOOLS[type])) {
+    if (!tool || typeof tool.execute !== 'function' || !/^[a-z][a-z0-9_]*$/.test(tool.id) || ids.has(tool.id)) {
+      throw new Error(`Agent 工具注册无效：${type}`)
+    }
+    ids.add(tool.id)
+  }
+}
+
 export const agentRegistry: Record<string, Agent> = Object.fromEntries(
   validAgentTypes.map(type => [
     type,
@@ -377,8 +390,6 @@ export const agentRegistry: Record<string, Agent> = Object.fromEntries(
       instructions: buildInstructions(type),
       model: buildModel(type),
       tools: AGENT_TOOLS[type],
-      workspace: skillWorkspaces[type],
-      skillsFormat: 'markdown',
     }),
   ]),
 )

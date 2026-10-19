@@ -5,17 +5,18 @@
       <div class="header-left">
         <button class="brand" @click="navigateTo('/')">
           <div class="brand-mark">
-            <img v-if="showBrandImage" :src="brandLogo" alt="Qunl 短剧" class="brand-logo" @error="showBrandImage = false" />
+            <img v-if="showBrandImage" :src="brandLogo" :alt="t('app.title')" class="brand-logo" @error="showBrandImage = false" />
             <span v-else class="brand-fallback">Q</span>
           </div>
           <div class="brand-text">
-            <span class="brand-name">Qunl 短剧</span>
+            <span class="brand-name">{{ t('app.title') }}</span>
             <span class="brand-sub">Qunl Drama</span>
           </div>
         </button>
       </div>
 
       <nav class="header-nav">
+        <QunlReturnLink />
         <NuxtLink to="/" class="nav-link" :class="{ active: route.path === '/' }">
           <LayoutGrid :size="15" :stroke-width="1.8" />
           <span>{{ t('layout.nav.projects') }}</span>
@@ -149,17 +150,20 @@ watch(locale, checkAiConfigs)
   -webkit-background-clip: text;
   background-clip: text;
   color: transparent;
-  letter-spacing: -0.01em;
+  letter-spacing: 0;
+  white-space: nowrap;
 }
 .brand-sub {
   font-size: 10px; font-weight: 400;
   color: var(--text-3); margin-top: 1px;
-  letter-spacing: 0.04em;
+  letter-spacing: 0;
+  white-space: nowrap;
 }
 
 /* Nav — pill segmented group */
 .header-nav {
-  display: flex; gap: 2px;
+  display: flex; flex-wrap: wrap; gap: 2px;
+  max-width: 100%;
   padding: 3px;
   border-radius: var(--radius-pill);
   background: var(--overlay-track);
@@ -189,6 +193,8 @@ watch(locale, checkAiConfigs)
 }
 .nav-link {
   display: flex; align-items: center; gap: 6px;
+  white-space: nowrap;
+  flex-shrink: 0;
   min-height: 32px;
   padding: 0 16px; border-radius: var(--radius-pill);
   font-size: 13px; font-weight: 600;
@@ -230,4 +236,18 @@ watch(locale, checkAiConfigs)
 
 /* Content */
 .content { flex: 1; overflow: hidden; display: flex; flex-direction: column; }
+
+@media (max-width: 800px) {
+  .header {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    height: auto;
+    padding: 8px 12px;
+    gap: 8px;
+  }
+  .header-left { grid-column: 1; grid-row: 1; }
+  .header-right { grid-column: 2; grid-row: 1; }
+  .header-nav { grid-column: 1 / -1; grid-row: 2; justify-self: start; }
+  .config-banner { flex-wrap: wrap; padding: 8px 12px; }
+}
 </style>

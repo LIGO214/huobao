@@ -32,7 +32,7 @@ export default defineNuxtConfig({
     // path (for example /huobao/). The desktop and root deployments stay at /.
     baseURL: appBaseURL,
     head: {
-      title: 'Qunl 短剧',
+      title: 'qunl短剧',
       meta: [{ name: 'viewport', content: 'width=device-width, initial-scale=1' }],
       link: [
         { rel: 'icon', type: 'image/png', sizes: '32x32', href: `${appBaseURL}favicon.png` },

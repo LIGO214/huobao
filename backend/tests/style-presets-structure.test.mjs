@@ -29,28 +29,29 @@ test('style presets route is mounted and implements CRUD', () => {
   assert.match(route, /app\.post\('\/'/)
   assert.match(route, /app\.put\('\/:id'/)
   assert.match(route, /app\.delete\('\/:id'/)
-  // value 唯一约束 + 格式校验 + 查重
-  assert.match(route, /VALUE_PATTERN/)
-  assert.match(route, /风格 key 已存在/)
+  const data = read('src/data/tenant/style-presets.ts')
+  assert.match(data, /value: z\.string\(\)\.trim\(\)\.regex/)
+  assert.match(data, /风格 key 已存在/)
+  assert.match(data, /stylePresets\.userId, userId/)
+  assert.doesNotMatch(route, /db\/index/)
   // GET 支持 ?all=1 且默认过滤停用项
   assert.match(route, /query\('all'\)/)
-  assert.match(route, /r\.isActive/)
+  assert.match(data, /rows\.filter\(row => row\.isActive\)/)
 })
 
 test('drama style prompt is injected into image prompt composition', () => {
   const service = read('src/services/style-preset.ts')
   const gridTools = read('src/agents/tools/image-prompt-tools.ts')
-  const characters = read('src/routes/characters.ts')
-  const scenes = read('src/routes/scenes.ts')
+  const data = read('src/data/tenant/image-prompts.ts')
+  const styles = read('src/data/tenant/styles.ts')
 
   assert.match(service, /getDramaStylePrompt/)
-  assert.match(service, /stylePresets\.value, drama\.style/)
-  assert.match(gridTools, /getDramaStylePrompt\(dramaId\)/)
-  // 保存最终提示词时由工具拼接项目视觉风格（风格片段置于最前方）
-  assert.match(gridTools, /stylePrompt \? `\$\{stylePrompt\}, \$\{prompt\}` : prompt/)
-  assert.match(characters, /getDramaStylePrompt/)
-  assert.match(characters, /characterImagePrompt\(char, stylePrompt\)/)
-  assert.match(scenes, /getDramaStylePrompt\(scene\.dramaId\)/)
+  assert.match(styles, /stylePresets\.value, drama\.style/)
+  assert.match(styles, /eq\(schema\.stylePresets\.userId, context\.userId\)/)
+  assert.match(gridTools, /saveCharacterPrompt\(getAgentTenantContext/)
+  assert.match(gridTools, /saveScenePrompt\(getAgentTenantContext/)
+  assert.match(data, /getDramaStylePrompt\(context, dramaId\)/)
+  assert.match(data, /style \? `\$\{style\}, \$\{prompt\}` : prompt/)
 })
 
 test('agent default prompts no longer hardcode consistent art style', () => {

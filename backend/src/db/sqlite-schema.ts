@@ -310,6 +310,33 @@ export const sqliteSchemaStatements = [
     value TEXT NOT NULL,
     updated_at TEXT NOT NULL
   )`,
+
+  `CREATE TABLE IF NOT EXISTS user_agent_prompts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    agent_type TEXT NOT NULL,
+    lang TEXT NOT NULL DEFAULT 'zh',
+    instructions TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE (user_id, agent_type, lang)
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_user_agent_prompts_user ON user_agent_prompts (user_id, agent_type, lang)`,
+
+  `CREATE TABLE IF NOT EXISTS user_agent_skills (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    agent_type TEXT NOT NULL,
+    skill_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    content TEXT NOT NULL,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE (user_id, agent_type, skill_id)
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_user_agent_skills_user ON user_agent_skills (user_id, agent_type, enabled, sort_order)`,
 ]
 
 /**
@@ -393,6 +420,21 @@ const REMOVE_SQL = 'DELETE FROM style_presets WHERE "value" = ? AND "prompt" = ?
 export function initSqliteSchema(sqlite: Database.Database) {
   for (const statement of sqliteSchemaStatements) {
     sqlite.exec(statement)
+  }
+  const tenantTables = [
+    'dramas', 'episodes', 'characters', 'episode_characters', 'episode_scenes',
+    'episode_props', 'scenes', 'storyboards', 'storyboard_characters',
+    'storyboard_props', 'ai_service_configs', 'style_presets', 'sys_task',
+    'agent_tasks', 'video_merges', 'props', 'assets',
+  ]
+  const tenantIdTables = tenantTables.filter(table =>
+    !['storyboard_characters', 'storyboard_props'].includes(table))
+  for (const table of tenantTables) {
+    ensureColumn(sqlite, table, 'user_id', 'INTEGER')
+    sqlite.exec(`CREATE INDEX IF NOT EXISTS idx_${table}_user_id ON ${table} (user_id)`)
+  }
+  for (const table of tenantIdTables) {
+    sqlite.exec(`CREATE UNIQUE INDEX IF NOT EXISTS uq_${table}_user_id_id ON ${table} (user_id, id)`)
   }
   ensureColumn(sqlite, 'characters', 'seedance_asset_url', 'TEXT')
   const insertSeed = sqlite.prepare(SEED_SQL)

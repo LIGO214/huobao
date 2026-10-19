@@ -1,6 +1,6 @@
 import { Hono } from 'hono'
-import { and, eq, isNull } from 'drizzle-orm'
-import { db, schema } from '../db/index.js'
+import { requireMergeEpisode, listEpisodeMerges } from '../data/tenant/merges.js'
+import { requireCurrentTenant } from '../security/tenant-runtime.js'
 import { success, badRequest } from '../utils/response.js'
 import { generateEpisodeSubtitles, getEpisodeSubtitles, mergeEpisodeVideos, saveEpisodeSubtitles } from '../services/ffmpeg-merge.js'
 import { toSnakeCase } from '../utils/transform.js'
@@ -14,8 +14,7 @@ app.get('/episodes/:id/subtitles', async (c) => {
 
 app.post('/episodes/:id/subtitles/generate', async (c) => {
   const episodeId = Number(c.req.param('id'))
-  const [episode] = await db.select().from(schema.episodes).where(eq(schema.episodes.id, episodeId))
-  if (!episode) return badRequest(c, '剧集不存在')
+  const episode = await requireMergeEpisode(requireCurrentTenant(), episodeId)
   try {
     return success(c, { content: await generateEpisodeSubtitles(episodeId, episode.dramaId) })
   } catch (err: any) {
@@ -36,16 +35,15 @@ app.put('/episodes/:id/subtitles', async (c) => {
 // POST /episodes/:id/merge — 拼接镜头视频(body.storyboard_ids 可选,只拼所选)
 app.post('/episodes/:id/merge', async (c) => {
   const episodeId = Number(c.req.param('id'))
-  const [ep] = await db.select().from(schema.episodes).where(eq(schema.episodes.id, episodeId))
-  if (!ep) return badRequest(c, '剧集不存在')
+  const ep = await requireMergeEpisode(requireCurrentTenant(), episodeId)
 
-  let storyboardIds: number[] | undefined
-  try {
-    const body = await c.req.json()
-    if (Array.isArray(body?.storyboard_ids)) {
-      storyboardIds = body.storyboard_ids.map(Number).filter(Boolean)
-    }
-  } catch { /* 无 body 时拼接全部 */ }
+  const text = await c.req.text()
+  const body = text ? JSON.parse(text) : {}
+  const storyboardIds = body.storyboard_ids
+  if (storyboardIds !== undefined && (!Array.isArray(storyboardIds) || storyboardIds.length === 0 ||
+    storyboardIds.some((id: unknown) => typeof id !== 'number' || !Number.isSafeInteger(id) || id <= 0))) {
+    return badRequest(c, '请选择有效的分镜编号')
+  }
 
   try {
     logTaskStart('MergeAPI', 'episode-merge', { episodeId, dramaId: ep.dramaId, storyboardIds })
@@ -61,11 +59,8 @@ app.post('/episodes/:id/merge', async (c) => {
 // GET /episodes/:id/merge — 查询最新拼接状态
 app.get('/episodes/:id/merge', async (c) => {
   const episodeId = Number(c.req.param('id'))
-  const merges = await db.select().from(schema.videoMerges)
-    .where(eq(schema.videoMerges.episodeId, episodeId))
-
-
-  const latest = merges[merges.length - 1]
+  const merges = await listEpisodeMerges(requireCurrentTenant(), episodeId)
+  const latest = merges[0]
   if (!latest) return success(c, null)
 
   return success(c, toSnakeCase(latest))
@@ -74,9 +69,7 @@ app.get('/episodes/:id/merge', async (c) => {
 // GET /episodes/:id/merges — 成片列表(全部拼接记录,新的在前)
 app.get('/episodes/:id/merges', async (c) => {
   const episodeId = Number(c.req.param('id'))
-  const merges = await db.select().from(schema.videoMerges)
-    .where(and(eq(schema.videoMerges.episodeId, episodeId), isNull(schema.videoMerges.deletedAt)))
-  merges.sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''))
+  const merges = await listEpisodeMerges(requireCurrentTenant(), episodeId)
   return success(c, merges.slice(0, 30).map(toSnakeCase))
 })
 

@@ -11,8 +11,9 @@ test('extraction service runs per-target async tasks', () => {
   // 三类资产目标
   assert.match(svc, /'characters' \| 'scenes' \| 'props'/)
   assert.match(svc, /EXTRACT_TARGETS.*characters.*scenes.*props/s)
-  // 按 集×类型 键控的内存任务表
-  assert.match(svc, /`\$\{episodeId\}:\$\{target\}`/)
+  // The current in-memory key must include the trusted user as well as episode and target.
+  assert.match(svc, /`\$\{userId\}:\$\{episodeId\}:\$\{target\}`/)
+  assert.match(svc, /keyOf\(tenant\.userId, episodeId, target\)/)
   assert.match(svc, /status: 'running' \| 'done' \| 'error'/)
   // 同集同类型运行中不重复启动
   assert.match(svc, /tasks\.get\(key\)\?\.status === 'running'\)\s*return false/)

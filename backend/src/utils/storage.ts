@@ -5,42 +5,35 @@ import fs from 'fs'
 import path from 'path'
 import sharp from 'sharp'
 import { v4 as uuid } from 'uuid'
-import { STORAGE_ROOT } from './paths.js'
+import { appConfig } from '../config/env.js'
+import { Readable } from 'node:stream'
+import { pipeline } from 'node:stream/promises'
+import { resolveTenantPath, saveTenantBytes, writeTenantMedia, StorageLimitError } from './tenant-storage.js'
 
 /**
  * 下载远程文件到本地存储
  */
 export async function downloadFile(url: string, subDir: string, timeoutMs = 120_000): Promise<string> {
-  const dir = path.join(STORAGE_ROOT, subDir)
-  fs.mkdirSync(dir, { recursive: true })
-
   const ext = getExtFromUrl(url)
   const filename = `${uuid()}${ext}`
-  const filePath = path.join(dir, filename)
-
-  const resp = await fetch(url, { signal: AbortSignal.timeout(timeoutMs) })
-  if (!resp.ok) throw new Error(`Download failed: ${resp.status}`)
-
-  const buffer = Buffer.from(await resp.arrayBuffer())
-  fs.writeFileSync(filePath, buffer)
-
-  // 返回相对路径（供 API 返回给前端）
-  return `static/${subDir}/${filename}`
+  return writeTenantMedia(`static/${subDir}/${filename}`, async (destination) => {
+    const resp = await fetch(url, { signal: AbortSignal.timeout(timeoutMs) })
+    if (!resp.ok || !resp.body) throw new Error(`Download failed: ${resp.status}`)
+    if (Number(resp.headers.get('content-length')) > appConfig.limits.mediaFileMaxBytes) {
+      await resp.body.cancel()
+      throw new StorageLimitError()
+    }
+    await pipeline(Readable.fromWeb(resp.body as never), destination)
+  })
 }
 
 /**
  * 保存上传的文件
  */
 export async function saveUploadedFile(data: ArrayBuffer, subDir: string, originalName: string): Promise<string> {
-  const dir = path.join(STORAGE_ROOT, subDir)
-  fs.mkdirSync(dir, { recursive: true })
-
   const ext = path.extname(originalName) || '.bin'
   const filename = `${uuid()}${ext}`
-  const filePath = path.join(dir, filename)
-
-  fs.writeFileSync(filePath, Buffer.from(data))
-  return `static/${subDir}/${filename}`
+  return saveTenantBytes(`static/${subDir}/${filename}`, new Uint8Array(data), appConfig.limits.uploadMaxBytes)
 }
 
 function getExtFromUrl(url: string): string {
@@ -56,10 +49,7 @@ function getExtFromUrl(url: string): string {
  * 获取本地文件的绝对路径
  */
 export function getAbsolutePath(relativePath: string): string {
-  if (relativePath.startsWith('static/')) {
-    return path.join(STORAGE_ROOT, '..', relativePath)
-  }
-  return path.join(STORAGE_ROOT, relativePath)
+  return resolveTenantPath(relativePath)
 }
 
 /**
@@ -67,18 +57,11 @@ export function getAbsolutePath(relativePath: string): string {
  * 用于 Gemini 等只返回 base64 数据的厂商
  */
 export async function saveBase64Image(base64Data: string, mimeType: string, subDir: string): Promise<string> {
-  const dir = path.join(STORAGE_ROOT, subDir)
-  fs.mkdirSync(dir, { recursive: true })
-
-  // 从 mimeType 推断文件扩展名
   const ext = mimeTypeToExt(mimeType)
   const filename = `${uuid()}${ext}`
-  const filePath = path.join(dir, filename)
-
+  if (base64Data.length > Math.ceil(appConfig.limits.mediaFileMaxBytes / 3) * 4 + 4) throw new StorageLimitError()
   const buffer = Buffer.from(base64Data, 'base64')
-  fs.writeFileSync(filePath, buffer)
-
-  return `static/${subDir}/${filename}`
+  return saveTenantBytes(`static/${subDir}/${filename}`, buffer)
 }
 
 /** 由图片相对路径推导缩略图路径：static/images/x.png → static/images/x_thumb.webp */
@@ -88,21 +71,17 @@ export function thumbPathFor(relativePath: string): string {
 
 /**
  * 为已落盘图片生成列表页缩略图（宽 400 WebP，与原图同目录）。
- * 失败（文件损坏/格式异常等）返回 null，不阻断主流程。
+ * 失败直接暴露；派生文件同样受用户额度限制。
  */
 export async function generateImageThumb(relativePath: string): Promise<string | null> {
-  try {
-    const thumbRel = thumbPathFor(relativePath)
-    await sharp(getAbsolutePath(relativePath))
-      .rotate()
-      .resize({ width: 400, withoutEnlargement: true })
-      .webp({ quality: 78 })
-      .toFile(getAbsolutePath(thumbRel))
-    return thumbRel
-  } catch (err) {
-    console.warn(`[storage] 缩略图生成失败 ${relativePath}:`, (err as Error).message)
-    return null
-  }
+  const thumbRel = thumbPathFor(relativePath)
+  return writeTenantMedia(thumbRel, async (destination) => {
+    await pipeline(
+      sharp(getAbsolutePath(relativePath), { limitInputPixels: appConfig.limits.imageMaxPixels })
+        .rotate().resize({ width: 400, withoutEnlargement: true }).webp({ quality: 78 }),
+      destination,
+    )
+  })
 }
 
 export function readImageAsDataUrl(relativePath: string): string {
@@ -153,7 +132,7 @@ async function compressImageAsDataUrl(
   const maxHeight = options.maxHeight ?? 768
   const quality = options.quality ?? 68
 
-  const resized = sharp(input).rotate().resize({
+  const resized = sharp(input, { limitInputPixels: appConfig.limits.imageMaxPixels }).rotate().resize({
     width: maxWidth,
     height: maxHeight,
     fit: 'inside',

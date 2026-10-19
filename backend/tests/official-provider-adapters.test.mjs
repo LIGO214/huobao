@@ -54,11 +54,13 @@ test('text provider base URL handling uses official Gemini v1beta endpoint', () 
 test('backend rejects unsupported providers at DB and route boundaries', () => {
   const ai = read('src/services/ai.ts')
   const route = read('src/routes/aiConfigs.ts')
+  const rules = read('src/data/system/model-provider-rules.ts')
 
   assert.match(ai, /officialProviders/)
-  assert.match(ai, /text:\s*\[\s*'openai',\s*'gemini',\s*'volcengine'\s*\]/)
-  assert.match(ai, /image:\s*\[\s*'openai',\s*'gemini',\s*'volcengine'\s*\]/)
-  assert.match(ai, /video:\s*\[\s*'volcengine',\s*'minimax',\s*'aliyun'\s*\]/)
+  assert.match(ai, /officialProviders = supportedProviders/)
+  assert.match(rules, /text:\s*\[\s*'openai',\s*'gemini',\s*'volcengine'\s*\]/)
+  assert.match(rules, /image:\s*\[\s*'openai',\s*'gemini',\s*'volcengine'\s*\]/)
+  assert.match(rules, /video:\s*\[\s*'volcengine',\s*'minimax',\s*'aliyun'\s*\]/)
   assert.doesNotMatch(ai, /'deepseek'/)
   assert.doesNotMatch(ai, /'ali'/)
   assert.doesNotMatch(ai, /'vidu'/)
@@ -69,7 +71,7 @@ test('backend rejects unsupported providers at DB and route boundaries', () => {
 
   assert.match(route, /isOfficialProvider/)
   assert.match(route, /isOfficialProvider\(body\.service_type,\s*body\.provider\)/)
-  assert.match(route, /isOfficialProvider\(serviceType,\s*provider\)/)
+  assert.match(route, /updateModelConfig\(requireCurrentTenant\(\), id/)
   assert.match(route, /不支持的 service_type\/provider/)
 })
 
@@ -87,21 +89,23 @@ test('AI config routes reject unsupported service/provider pairs in create, test
   assert.match(testRoute, /isOfficialProvider\(body\.service_type,\s*body\.provider\)/)
   assert.match(testRoute, /badRequest\(c,\s*'不支持的 service_type\/provider'\)/)
 
-  assert.match(updateRoute, /const serviceType = 'service_type' in body \? body\.service_type : existing\.serviceType/)
-  assert.match(updateRoute, /const provider = 'provider' in body \? body\.provider : existing\.provider/)
-  assert.doesNotMatch(updateRoute, /body\.service_type \|\| existing\.serviceType/)
-  assert.doesNotMatch(updateRoute, /body\.provider \|\| existing\.provider/)
-  assert.match(updateRoute, /isOfficialProvider\(serviceType,\s*provider\)/)
-  assert.match(updateRoute, /badRequest\(c,\s*'不支持的 service_type\/provider'\)/)
+  assert.match(updateRoute, /updateModelConfig\(requireCurrentTenant\(\), id/)
+  const data = read('src/data/tenant/model-configs.ts')
+  assert.match(data, /isSupportedProvider\(fields\.serviceType \?\? existing\.serviceType, fields\.provider \?\? existing\.provider\)/)
+  assert.match(data, /invalidInput\('不支持的 service_type\/provider'\)/)
 })
 
-test('AI config update route persists service type changes after validation', () => {
+test('AI config updates delegate to tenant data access and revalidate under the row lock', () => {
   const route = read('src/routes/aiConfigs.ts')
   const updateRoute = routeBlock(route, "app.put('/:id',")
+  const data = read('src/data/tenant/model-configs.ts')
 
-  assert.match(updateRoute, /const updates: Record<string, any> = \{ updatedAt: now\(\) \}/)
-  assert.match(updateRoute, /if \('service_type' in body\) updates\.serviceType = body\.service_type/)
-  assert.match(updateRoute, /if \('provider' in body\) updates\.provider = body\.provider/)
+  assert.match(updateRoute, /updateModelConfig\(requireCurrentTenant\(\), id, \{ serviceType: body\.service_type, provider: body\.provider/)
+  assert.doesNotMatch(route, /from ['"]\.\.\/db/)
+  assert.match(data, /for\('update'\)/)
+  assert.match(data, /isSupportedProvider\(fields\.serviceType \?\? existing\.serviceType, fields\.provider \?\? existing\.provider\)/)
+  assert.match(data, /serviceType: fields\.serviceType, provider: fields\.provider\?\.trim\(\)\.toLowerCase\(\)/)
+  assert.match(data, /eq\(schema\.aiServiceConfigs\.userId, userId\)/)
 })
 
 test('AI config probe uses provider-specific auth schemes', () => {
@@ -181,7 +185,9 @@ test('new image and video models use their current API shapes', () => {
   assert.match(volcVideo, /doubao-seedance-2-0-mini-260615/)
   // Seedance 2.0 多模态能力
   assert.match(volcVideo, /SEEDANCE2_MODEL_PREFIX/)
-  assert.match(volcVideo, /startsWith\(SEEDANCE2_MODEL_PREFIX\)/)
+  assert.match(volcVideo, /SEEDANCE2_MODEL_PREFIXES\.some\(prefix => model\.startsWith\(prefix\)\)/)
+  assert.match(volcVideo, /dreamina-seedance-2-0/)
+  assert.doesNotMatch(volcVideo, /\/video\/generations|usesDreaminaGateway/)
   assert.match(volcVideo, /reference_video/)
   assert.match(volcVideo, /reference_audio/)
   assert.match(volcVideo, /generate_audio:\s*record\.generateAudio/)

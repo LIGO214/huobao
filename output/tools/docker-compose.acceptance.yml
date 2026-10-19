@@ -1,0 +1,41 @@
+# Disposable local acceptance services. All credentials below are synthetic.
+services:
+  app:
+    image: huobao-drama:acceptance-20261019
+    ports:
+      - "127.0.0.1:15681:5679"
+    environment:
+      DATABASE_URL: postgres://huobao_acceptance:HuobaoLocalPg20261019@postgres:5432/huobao_acceptance
+      HUOBAO_PROXY_SECRET: huobao-local-acceptance-proxy-20261019-only
+      HUOBAO_MODEL_CONFIG_SOURCE: user
+      PUBLIC_BASE_URL: http://127.0.0.1:3300/huobao
+      HUOBAO_CORS_ORIGINS: http://127.0.0.1:3300
+    volumes:
+      - media:/app/data
+    networks:
+      - database
+      - default
+    depends_on:
+      postgres:
+        condition: service_healthy
+  postgres:
+    image: postgres:17-bookworm
+    environment:
+      POSTGRES_USER: huobao_acceptance
+      POSTGRES_PASSWORD: HuobaoLocalPg20261019
+      POSTGRES_DB: huobao_acceptance
+    volumes:
+      - postgres:/var/lib/postgresql/data
+    networks:
+      - database
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U huobao_acceptance -d huobao_acceptance"]
+      interval: 3s
+      timeout: 3s
+      retries: 15
+volumes:
+  media:
+  postgres:
+networks:
+  database:
+    internal: true

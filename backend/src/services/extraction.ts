@@ -5,6 +5,10 @@
  */
 import { mastra } from '../mastra/index.js'
 import { buildAgentRequestContext } from '../agents/context.js'
+import { requireEpisode, requireAgentEpisode } from '../data/tenant/agent-scripts.js'
+import { requireCurrentTenant } from '../security/tenant-runtime.js'
+import { createAgentJob } from '../data/tenant/agent-jobs.js'
+import { executeAgentJob } from './agent-execution.js'
 import { logTaskError, logTaskProgress, logTaskStart, logTaskSuccess } from '../utils/task-logger.js'
 
 export type ExtractTarget = 'characters' | 'scenes' | 'props'
@@ -18,7 +22,7 @@ export interface ExtractTask {
 }
 
 const tasks = new Map<string, ExtractTask>()
-const keyOf = (episodeId: number, target: string) => `${episodeId}:${target}`
+const keyOf = (userId: number, episodeId: number, target: string) => `${userId}:${episodeId}:${target}`
 
 /** 每类资产的提取指令：限定只提取该类型，并要求与已有数据去重合并 */
 const EXTRACT_MESSAGES: Record<ExtractTarget, string> = {
@@ -28,27 +32,32 @@ const EXTRACT_MESSAGES: Record<ExtractTarget, string> = {
 }
 
 /** 启动异步提取任务（立即返回）；同集同类型已在运行时返回 false；可指定文本模型覆盖 */
-export function startExtraction(episodeId: number, dramaId: number, target: ExtractTarget, opts: { model?: string; configId?: number } = {}): boolean {
-  const key = keyOf(episodeId, target)
+export async function startExtraction(episodeId: number, dramaId: number, target: ExtractTarget, opts: { model?: string; configId?: number } = {}): Promise<boolean> {
+  const tenant = requireCurrentTenant()
+  await requireAgentEpisode(tenant, episodeId, dramaId)
+  if (!EXTRACT_TARGETS.includes(target)) throw new Error('未知的提取类型')
+  const requestContext = await buildAgentRequestContext({ agentType: 'extractor', episodeId, dramaId, modelOverride: opts.model, textConfigId: opts.configId })
+  const key = keyOf(tenant.userId, episodeId, target)
   if (tasks.get(key)?.status === 'running') return false
 
   const task: ExtractTask = { status: 'running', started_at: new Date().toISOString() }
   tasks.set(key, task)
+  let job: Awaited<ReturnType<typeof createAgentJob>>
+  try {
+    job = await createAgentJob(tenant, 'extractor', dramaId, episodeId)
+  } catch (error) {
+    tasks.delete(key)
+    throw error
+  }
 
   logTaskStart('Extract', target, { episodeId, dramaId, model: opts.model || undefined, configId: opts.configId || undefined })
-  ;(async () => {
+  void executeAgentJob(tenant, job, async () => {
     const agent = mastra.getAgent('extractor')
     if (!agent) throw new Error('提取 Agent 不可用')
-    const requestContext = buildAgentRequestContext({
-      episodeId,
-      dramaId,
-      modelOverride: opts.model || undefined,
-      textConfigId: opts.configId || undefined,
-    })
     return agent.generate([{ role: 'user', content: EXTRACT_MESSAGES[target] }], {
       maxSteps: 20,
       requestContext,
-      // 逐步打印 Agent 进展：调用了哪些工具、输出了什么
+      // Only tool names and counters belong in operational logs.
       onStepFinish: (step: any) => {
         const tools = (step?.toolCalls || [])
           .map((t: any) => t?.toolName || t?.payload?.toolName)
@@ -56,11 +65,10 @@ export function startExtraction(episodeId: number, dramaId: number, target: Extr
         logTaskProgress('Extract', `${target}-step`, {
           episodeId,
           tools: tools.length ? tools.join(',') : undefined,
-          text: (step?.text || '').slice(0, 200) || undefined,
         })
       },
     })
-  })()
+  })
     .then((result: any) => {
       task.status = 'done'
       task.finished_at = new Date().toISOString()
@@ -69,21 +77,22 @@ export function startExtraction(episodeId: number, dramaId: number, target: Extr
         episodeId,
         steps: result?.steps?.length,
         toolCalls: toolNames.join(',') || undefined,
-        reply: (result?.text || '').slice(0, 300) || undefined,
       })
     })
     .catch((err: any) => {
       task.status = 'error'
       task.finished_at = new Date().toISOString()
-      task.error = err?.message || '提取失败'
+      task.error = '提取失败'
       logTaskError('Extract', target, { episodeId, error: err?.message })
     })
   return true
 }
 
 /** 查询某集三类资产的提取任务状态（未启动过的类型为 null） */
-export function getExtractionStatus(episodeId: number): Record<ExtractTarget, ExtractTask | null> {
+export async function getExtractionStatus(episodeId: number): Promise<Record<ExtractTarget, ExtractTask | null>> {
+  const tenant = requireCurrentTenant()
+  await requireEpisode(tenant, episodeId)
   const result = {} as Record<ExtractTarget, ExtractTask | null>
-  for (const target of EXTRACT_TARGETS) result[target] = tasks.get(keyOf(episodeId, target)) || null
+  for (const target of EXTRACT_TARGETS) result[target] = tasks.get(keyOf(tenant.userId, episodeId, target)) || null
   return result
 }

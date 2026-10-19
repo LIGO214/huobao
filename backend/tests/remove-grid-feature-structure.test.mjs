@@ -17,7 +17,7 @@ test('backend no longer exposes the grid image API or split service', () => {
 
 test('image prompt agent keeps role and scene prompts but removes grid prompt mode', () => {
   const agents = read('src/agents/index.ts')
-  const skills = read('src/agents/skills.ts')
+  const skills = read('src/agents/catalog.ts')
   const imagePromptTools = read('src/agents/tools/image-prompt-tools.ts')
   const storyboardTools = read('src/agents/tools/storyboard-tools.ts')
   const skill = read('workspace/skills/prompt-generator/prop-prompt/SKILL.md')

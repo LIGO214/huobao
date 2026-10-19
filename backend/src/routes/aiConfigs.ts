@@ -1,26 +1,24 @@
 import { Hono } from 'hono'
-import { eq } from 'drizzle-orm'
-import { db, getInsertId, schema } from '../db/index.js'
-import { success, notFound, created, badRequest, now } from '../utils/response.js'
+import { success, created, badRequest } from '../utils/response.js'
 import { toSnakeCase } from '../utils/transform.js'
 import { joinProviderUrl } from '../services/adapters/url.js'
 import { isOfficialProvider, parseConfigTemperature } from '../services/ai.js'
 import { redactUrl, logTaskError, logTaskProgress, logTaskSuccess } from '../utils/task-logger.js'
+import { requireCurrentTenant } from '../security/tenant-runtime.js'
+import { listModelConfigs, requireModelConfig, createModelConfig, updateModelConfig, deleteModelConfig } from '../data/tenant/model-configs.js'
+import { listModelProviders } from '../data/system/model-providers.js'
+import { invalidInput } from '../data/errors.js'
+import { readInput } from './asset-input.js'
+import { createModelConfigInput, updateModelConfigInput, probeModelConfigInput, modelConfigListInput } from './model-config-input.js'
 
 const app = new Hono()
 
-/** 归一化 temperature 入参：null=未设置；合法值 0~2；非法抛错 */
-function normalizeTemperature(v: any): number | null {
-  if (v === null || v === undefined || v === '') return null
-  const n = Number(v)
-  if (!Number.isFinite(n) || n < 0 || n > 2) throw new Error('invalid temperature')
-  return n
-}
-
 /** 把 settings JSON 中的 temperature 透出为顶层字段，便于前端直接读写 */
 function withParsedFields(r: any) {
+  const { apiKey, ...publicFields } = r
   return {
-    ...toSnakeCase(r),
+    ...toSnakeCase(publicFields),
+    has_api_key: Boolean(apiKey),
     model: r.model ? JSON.parse(r.model) : [],
     temperature: parseConfigTemperature(r.settings),
   }
@@ -117,9 +115,9 @@ function buildProbe(serviceType: string, provider: string, baseUrl: string, mode
 
 // GET /ai-configs?service_type=text
 app.get('/', async (c) => {
-  const serviceType = c.req.query('service_type')
-  let rows = await db.select().from(schema.aiServiceConfigs)
-  if (serviceType) rows = rows.filter(r => r.serviceType === serviceType)
+  const filters = modelConfigListInput.safeParse(c.req.query())
+  if (!filters.success) invalidInput('模型配置筛选参数无效')
+  const rows = await listModelConfigs(requireCurrentTenant(), filters.data.service_type)
 
   const parsed = rows.map(withParsedFields)
   return success(c, parsed)
@@ -127,8 +125,7 @@ app.get('/', async (c) => {
 
 // POST /ai-configs
 app.post('/', async (c) => {
-  const body = await c.req.json()
-  const ts = now()
+  const body = await readInput(c, createModelConfigInput)
 
   // 验证必填字段
   if (!body.service_type || !body.provider) {
@@ -138,38 +135,22 @@ app.post('/', async (c) => {
     return badRequest(c, '不支持的 service_type/provider')
   }
 
-  let temperature: number | null = null
-  if ('temperature' in body) {
-    try {
-      temperature = normalizeTemperature(body.temperature)
-    } catch {
-      return badRequest(c, 'temperature 须为 0 到 2 之间的数字')
-    }
-  }
-
-  const res = await db.insert(schema.aiServiceConfigs).values({
+  const row = await createModelConfig(requireCurrentTenant(), {
     serviceType: body.service_type,
     provider: body.provider,
-    name: body.name || `${body.provider}-${body.service_type}`,
-    baseUrl: body.base_url || '',
-    apiKey: body.api_key || '',
-    model: JSON.stringify(body.model || []),
-    priority: body.priority || 0,
-    isActive: true,
-    settings: temperature !== null ? JSON.stringify({ temperature }) : null,
-    createdAt: ts,
-    updatedAt: ts,
+    name: body.name, baseUrl: body.base_url, apiKey: body.api_key, model: body.model,
+    priority: body.priority, isActive: body.is_active, temperature: body.temperature,
   })
-
-  const [row] = await db.select().from(schema.aiServiceConfigs)
-    .where(eq(schema.aiServiceConfigs.id, getInsertId(res)))
 
   return created(c, withParsedFields(row))
 })
 
 // POST /ai-configs/test
 app.post('/test', async (c) => {
-  const body = await c.req.json()
+  const input = await readInput(c, probeModelConfigInput)
+  const saved = input.config_id === undefined ? undefined : await requireModelConfig(requireCurrentTenant(), input.config_id)
+  const body = { service_type: saved?.serviceType, provider: saved?.provider, base_url: saved?.baseUrl,
+    api_key: saved?.apiKey, model: saved?.model ? JSON.parse(saved.model) as string[] : undefined, ...input }
   if (!body.service_type || !body.provider || !body.base_url) {
     return badRequest(c, '需要 service_type、provider 与 base_url')
   }
@@ -193,8 +174,9 @@ app.post('/test', async (c) => {
       method: probe.method,
       headers: probe.headers,
       body: probe.body ? JSON.stringify(probe.body) : undefined,
+      redirect: 'error', signal: AbortSignal.timeout(15_000),
     })
-    const text = await resp.text()
+    await resp.body?.cancel()
     const reachable = [200, 204, 400, 401, 403].includes(resp.status)
     const payload = {
       ok: resp.ok,
@@ -206,7 +188,7 @@ app.post('/test', async (c) => {
       message: reachable
         ? (resp.ok ? '端点可访问，认证与路径基本正常' : '端点已响应，请根据状态码判断认证或路径是否正确')
         : '端点未按预期响应，请检查 Base URL 和代理前缀',
-      response_preview: text.slice(0, 240),
+      response_preview: '',
     }
     if (reachable) {
       logTaskSuccess('AIConfig', 'probe-done', {
@@ -233,7 +215,7 @@ app.post('/test', async (c) => {
       reachable: false,
       method: probe.method,
       url: probeUrl,
-      message: error.message || '请求失败',
+      message: '模型接口连接失败',
       response_preview: '',
     })
   }
@@ -241,65 +223,31 @@ app.post('/test', async (c) => {
 
 // GET /ai-configs/:id
 app.get('/:id', async (c) => {
-  const id = Number(c.req.param('id'))
-  const [row] = await db.select().from(schema.aiServiceConfigs).where(eq(schema.aiServiceConfigs.id, id))
-  if (!row) return notFound(c)
+  const row = await requireModelConfig(requireCurrentTenant(), Number(c.req.param('id')))
   return success(c, withParsedFields(row))
 })
 
 // PUT /ai-configs/:id
 app.put('/:id', async (c) => {
   const id = Number(c.req.param('id'))
-  const body = await c.req.json()
-  const [existing] = await db.select().from(schema.aiServiceConfigs).where(eq(schema.aiServiceConfigs.id, id))
-  if (!existing) return notFound(c)
+  const body = await readInput(c, updateModelConfigInput)
 
-  const serviceType = 'service_type' in body ? body.service_type : existing.serviceType
-  const provider = 'provider' in body ? body.provider : existing.provider
-  if (!isOfficialProvider(serviceType, provider)) {
-    return badRequest(c, '不支持的 service_type/provider')
-  }
-
-  const updates: Record<string, any> = { updatedAt: now() }
-
-  if ('service_type' in body) updates.serviceType = body.service_type
-  if ('provider' in body) updates.provider = body.provider
-  if ('name' in body) updates.name = body.name
-  if ('base_url' in body) updates.baseUrl = body.base_url
-  if ('api_key' in body) updates.apiKey = body.api_key
-  if ('model' in body) updates.model = JSON.stringify(body.model)
-  if ('priority' in body) updates.priority = body.priority
-  if ('is_active' in body) updates.isActive = body.is_active
-  if ('temperature' in body) {
-    let temperature: number | null
-    try {
-      temperature = normalizeTemperature(body.temperature)
-    } catch {
-      return badRequest(c, 'temperature 须为 0 到 2 之间的数字')
-    }
-    // 与已有 settings 合并，清空的 temperature 从 JSON 中移除
-    let settings: Record<string, any> = {}
-    try { settings = existing.settings ? JSON.parse(existing.settings) : {} } catch { settings = {} }
-    if (temperature === null) delete settings.temperature
-    else settings.temperature = temperature
-    updates.settings = Object.keys(settings).length ? JSON.stringify(settings) : null
-  }
-
-  await db.update(schema.aiServiceConfigs).set(updates).where(eq(schema.aiServiceConfigs.id, id))
+  await updateModelConfig(requireCurrentTenant(), id, { serviceType: body.service_type, provider: body.provider,
+    name: body.name, baseUrl: body.base_url, apiKey: body.api_key, model: body.model, priority: body.priority,
+    isActive: body.is_active, temperature: body.temperature })
   return success(c)
 })
 
 // DELETE /ai-configs/:id
 app.delete('/:id', async (c) => {
-  const id = Number(c.req.param('id'))
-  await db.delete(schema.aiServiceConfigs).where(eq(schema.aiServiceConfigs.id, id))
+  await deleteModelConfig(requireCurrentTenant(), Number(c.req.param('id')))
   return success(c)
 })
 
 // GET /ai-providers
 export const aiProviders = new Hono()
 aiProviders.get('/', async (c) => {
-  const rows = await db.select().from(schema.aiServiceProviders)
+  const rows = await listModelProviders()
   const parsed = rows.map(r => ({
     ...toSnakeCase(r),
     preset_models: r.presetModels ? JSON.parse(r.presetModels) : [],

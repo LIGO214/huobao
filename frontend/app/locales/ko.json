@@ -1,4 +1,14 @@
 {
+  "agentCustomization": {
+    "builtIn": "기본 제공, 읽기 전용",
+    "builtInPrompt": "기본 Prompt",
+    "personalPrompt": "개인 추가 Prompt",
+    "clearPrompt": "개인 Prompt 지우기",
+    "enabled": "활성화",
+    "order": "순서",
+    "content": "Skill 내용",
+    "retry": "새로고침"
+  },
   "app": {
     "title": "Qunl Drama",
     "updateAvailable": "새 버전 v{version}을 사용할 수 있습니다. 「설정 → 업데이트 정보」에서 업그레이드하세요"
@@ -33,6 +43,7 @@
   },
   "layout": {
     "nav": {
+      "qunl": "Qunl로 돌아가기",
       "projects": "프로젝트",
       "settings": "설정"
     },
@@ -271,12 +282,13 @@
       "unifiedSwitchWarning": "{lang}(으)로 전환되었습니다. UI와 AI 콘텐츠 언어가 함께 변경되며 곧 새로고침됩니다…"
     },
     "ai": {
+      "keepKey": "저장된 키를 유지하려면 비워 두세요",
       "title": "AI 서비스 설정",
       "desc": "먼저 추천 템플릿으로 설정을 만들고, 서비스 유형별로 미세 조정합니다. 워크벤치에서 화를 생성할 때 선택한 이미지·영상 기능이 고정됩니다.",
       "quickTitle": "Qunl 빠른 설정",
       "recommended": "추천",
       "quickDesc": "Qunl API Key를 입력하면 텍스트·이미지·영상 세 개의 추천 설정을 한 번에 작성합니다.",
-      "getKey": "api.firemux.com에서 Key 받기",
+      "getKey": "Qunl 토큰",
       "applyQuick": "Qunl 설정 작성",
       "manualTitle": "수동 템플릿",
       "manualDesc": "서비스 유형을 선택하면 추천 `provider / base URL / model`이 템플릿에서 입력됩니다.",
@@ -740,6 +752,11 @@
       "deleteRecord": "이 기록 삭제",
       "historyDeleted": "이 기록이 삭제되었습니다",
       "needRefOrPrompt": "참조 소재 또는 영상 프롬프트가 최소 1개 필요합니다",
+      "needPrompt": "영상 프롬프트를 먼저 입력해 주세요",
+      "referencesUnavailable": "영상 참조 소재는 아직 지원되지 않습니다",
+      "generationMode": "생성 모드",
+      "textMode": "텍스트로 영상 생성",
+      "referenceModeUnavailable": "참조 영상 (사용 불가)",
       "generating": "영상 생성 중",
       "genDone": "영상 생성이 완료되었습니다",
       "genFailed": "영상 생성에 실패했습니다",
@@ -770,7 +787,7 @@
       "aspectRatio": "화면 비율"
     },
     "inspector": {
-      "videoPromptPlaceholder": "{'@'}캐릭터명 / {'@'}장멸명 으로 참조 소재를 지정(생성 시 참조 이미지로 자동 매핑). 시간대별로 화면의 움직임과 침라를 기술…",
+      "videoPromptPlaceholder": "장면, 인물의 행동, 카메라 움직임, 조명, 분위기…",
       "noRefs": "이 스토리보드에는 참조 소재가 연결되어 있지 않습니다",
       "refMedia": "참조 이미지 / 영상 / 오디오",
       "imageN": "이미지 {n}",

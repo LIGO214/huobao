@@ -10,7 +10,9 @@ test('video prompt batch service runs per-shot async agent loop', () => {
 
   // 默认只处理缺少 video_prompt 的分镜；指定 storyboardIds 时只处理所选（已有提示词也重新生成）
   assert.match(svc, /filter\(sb => !\(sb\.videoPrompt \|\| ''\)\.trim\(\)\)/)
-  assert.match(svc, /storyboardIds\?\.length/)
+  assert.match(svc, /storyboardIds !== undefined/)
+  assert.match(svc, /storyboardIds\.forEach\(requireResourceId\)/)
+  assert.match(svc, /storyboardIds\.some\(id => !sbs\.some\(sb => sb\.id === id\)\)\) resourceNotFound\(\)/)
   assert.match(svc, /storyboardIds\.includes\(sb\.id\)/)
   // 运行中不重复启动
   assert.match(svc, /status === 'running'\) return \{ started: false, total: -1 \}/)
